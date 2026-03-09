@@ -58,7 +58,7 @@ class DeltaDefiAMMConfig(BaseClientModel):
     num_levels: int = Field(1)
     size_decay: Decimal = Field(D("0.85"))
     spread_multiplier: Decimal = Field(D("1.5"))
-    order_amount_pct: Decimal = Field(D("0.02"))
+    order_amount_pct: Decimal = Field(D("0.005"))
     order_refresh_time: int = Field(5)
     refresh_on_fill_only: bool = Field(True)
     floor_ratio: Decimal = Field(D("0.30"))
