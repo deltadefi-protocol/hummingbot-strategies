@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import logging.handlers
 import os
 import random
 import time
@@ -45,18 +46,18 @@ class DeltaDefiAMMConfig(BaseClientModel):
     exchange: str = Field("deltadefi")
     trading_pair: str = Field(default="ADA-USDM")
     initial_price: Optional[Decimal] = Field(default=None)
-    max_pool_depth: Optional[Decimal] = Field(D("10000"))
-    min_pool_depth: Optional[Decimal] = Field(default=None)
+    max_pool_depth: Optional[Decimal] = Field(D("5000"))
+    min_pool_depth: Optional[Decimal] = Field(default=D("5000"))
     base_spread_bps: Decimal = Field(D("40"))
     max_cumulative_loss: Decimal = Field(D("500"))
     min_base_balance: Decimal = Field(D("1000"))
     min_quote_balance: Decimal = Field(D("500"))
     # Optional (hardcode defaults, overridable in config)
     amplification: Decimal = Field(D("20"))
-    num_levels: int = Field(3)
-    size_decay: Decimal = Field(D("0.7"))
+    num_levels: int = Field(1)
+    size_decay: Decimal = Field(D("0.85"))
     spread_multiplier: Decimal = Field(D("1.5"))
-    order_amount_pct: Decimal = Field(D("0.015"))
+    order_amount_pct: Decimal = Field(D("0.02"))
     order_refresh_time: int = Field(5)
     refresh_on_fill_only: bool = Field(True)
     floor_ratio: Decimal = Field(D("0.30"))
@@ -64,11 +65,14 @@ class DeltaDefiAMMConfig(BaseClientModel):
     rebalance_threshold: Decimal = Field(D("0.02"))
     rebalance_cooldown: int = Field(60)
     min_both_sides_pct: Decimal = Field(D("0.40"))
+    # Hybrid pricing: 0=pure PMM (anchor), 1=pure AMM (k-price)
+    pool_price_weight: Decimal = Field(D("0.70"))
+    anchor_ema_alpha: Decimal = Field(D("0.05"))
     # Enhancement flags
-    enable_fill_velocity_detector: bool = Field(False)
+    enable_fill_velocity_detector: bool = Field(True)
     fill_velocity_window_sec: int = Field(10)
     fill_velocity_max_same_side: int = Field(3)
-    enable_asymmetric_spread: bool = Field(False)
+    enable_asymmetric_spread: bool = Field(True)
     skew_sensitivity: Decimal = Field(D("0.5"))
     min_spread_bps: Decimal = Field(D("20"))
     enable_order_randomization: bool = Field(False)
@@ -79,6 +83,10 @@ class DeltaDefiAMMConfig(BaseClientModel):
         preset = PAIR_PRESETS.get(self.trading_pair, {})
         if self.initial_price is None:
             self.initial_price = preset.get("initial_price", D("0.01"))
+        if not (ZERO <= self.pool_price_weight <= D(1)):
+            raise ValueError("pool_price_weight must be in [0, 1]")
+        if not (ZERO < self.anchor_ema_alpha <= D(1)):
+            raise ValueError("anchor_ema_alpha must be in (0, 1]")
         return self
 
 
@@ -127,12 +135,25 @@ class VirtualPool:
             "anchor_price": str(self.anchor_price),
         }
 
-    def get_mid_price(self) -> Decimal:
+    def get_mid_price(self, pool_price_weight: Decimal = ZERO) -> Decimal:
+        """Blended mid: (1-w)*anchor_mid + w*pool_price.
+        w=0 → pure PMM (anchor-based), w=1 → pure AMM (k-curve)."""
         if self.base <= ZERO:
             return self.anchor_price
+        pool_price = self.quote / self.base
+        if pool_price_weight >= D(1):
+            return pool_price
         inventory_ratio = self.base / self.initial_base
         shift = (D(1) / inventory_ratio - D(1)) / self.amplification
-        return self.anchor_price * (D(1) + shift)
+        anchor_mid = self.anchor_price * (D(1) + shift)
+        if pool_price_weight <= ZERO:
+            return anchor_mid
+        return (D(1) - pool_price_weight) * anchor_mid + pool_price_weight * pool_price
+
+    def get_pool_price(self) -> Optional[Decimal]:
+        if self.base <= ZERO:
+            return None
+        return self.quote / self.base
 
     def update_on_fill(self, side: TradeType, amount: Decimal):
         filled = D(str(amount))
@@ -235,6 +256,27 @@ class DeltaDefiAMM(StrategyV2Base):
         super().__init__(connectors, config)
         if self.config is None:
             self.config = DeltaDefiAMMConfig()
+
+        # Per-pair logger with dedicated file handler → logs/logs_deltadefi_amm_mm_ADA-USDM.log
+        pair_tag = self.config.trading_pair
+        self._pair_logger = logging.getLogger(f"{__name__}.{pair_tag}")
+        self._pair_logger.propagate = False  # Don't duplicate to root/parent handler
+
+        logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        pair_log_file = os.path.join(logs_dir, f"logs_deltadefi_amm_mm_{pair_tag}.log")
+        if not self._pair_logger.handlers:
+            fh = logging.handlers.TimedRotatingFileHandler(
+                pair_log_file, when="D", interval=1, backupCount=7, encoding="utf8"
+            )
+            fh.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+            self._pair_logger.addHandler(fh)
+            # Also log to console for Hummingbot UI
+            ch = logging.StreamHandler()
+            ch.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+            self._pair_logger.addHandler(ch)
+            self._pair_logger.setLevel(logging.DEBUG)
+
         self._state_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state")
         os.makedirs(self._state_dir, exist_ok=True)
         self._state_file = os.path.join(self._state_dir, f"{self.config.trading_pair}_pool_state.json")
@@ -244,7 +286,7 @@ class DeltaDefiAMM(StrategyV2Base):
             self.pool = VirtualPool.from_state(state)
             self._base_flow = D(str(state.get("base_flow", "0")))
             self._quote_flow = D(str(state.get("quote_flow", "0")))
-            self.logger().info(f"Restored pool state from {self._state_file}")
+            self._pair_logger.info(f"Restored pool state from {self._state_file}")
         else:
             # First run: pool will be initialized from real balance on first tick
             self.pool = None
@@ -253,6 +295,7 @@ class DeltaDefiAMM(StrategyV2Base):
 
         self.balance_gate = BalanceGate(connectors[self.config.exchange], self.config)
         self._recent_fills: deque = deque()
+        self._last_max_safe: Decimal = ZERO  # updated each order cycle
 
     # ---- Main loop --------------------------------------------------------
 
@@ -297,26 +340,65 @@ class DeltaDefiAMM(StrategyV2Base):
 
         book_mid = self._get_book_mid()
         if book_mid:
-            self.pool.anchor_price = book_mid
-        mid = self.pool.get_mid_price()
+            self._update_anchor_ema(book_mid)
+        mid = self.pool.get_mid_price(self.config.pool_price_weight)
         RateOracle.get_instance().set_price(self.config.trading_pair, mid)
-        base_avail, quote_avail = self.pool.get_available_reserves(self.config.floor_ratio)
 
-        orders = self._generate_orders(mid, base_avail, quote_avail)
+        orders = self._generate_orders(mid)
         orders = self.balance_gate.scale_orders(orders)
         self._place_orders(orders)
 
-        self._check_rebalance()
+        safe_ensure_future(self._check_rebalance())
         self._refresh_timestamp = self.current_timestamp + self.config.order_refresh_time
 
     # ---- Order generation -------------------------------------------------
 
-    def _generate_orders(
-        self, mid_price: Decimal, avail_base: Decimal, avail_quote: Decimal
-    ) -> List[OrderProposal]:
+    def _max_safe_order_base(self) -> Decimal:
+        """Max order size (in base) that won't trigger ping-pong.
+
+        No-ping-pong condition: blended_shift < spread
+          blended_shift ≈ (dB/B) × [(1-w)/A + 2w]
+          => dB < B × spread / shift_factor
+        """
+        w = self.config.pool_price_weight
+        A = self.config.amplification
+        spread = self.config.base_spread_bps / D("10000")
+
+        shift_factor = (D(1) - w) / A + D(2) * w
+        if shift_factor <= ZERO:
+            return D("999999999")
+
+        max_dB_over_B = spread / shift_factor
+        max_base = self.pool.base * max_dB_over_B
+        # Also express as quote limit for the bid side
+        self._last_max_safe = max_base  # cache for status display
+        return max_base
+
+    def _compute_order_value(self, mid: Decimal) -> Decimal:
+        """Order value (in quote) = order_amount_pct × total capital."""
+        real_base, real_quote = self.balance_gate.get_real_balances()
+        total_capital = real_base * mid + real_quote
+        return total_capital * self.config.order_amount_pct
+
+    def _generate_orders(self, mid_price: Decimal) -> List[OrderProposal]:
         orders: List[OrderProposal] = []
-        total_ask_budget = avail_base * self.config.order_amount_pct
-        total_bid_budget = avail_quote * self.config.order_amount_pct
+
+        order_value = self._compute_order_value(mid_price)
+        max_safe_base = self._max_safe_order_base()
+        max_safe_value = max_safe_base * mid_price
+
+        # Cap order value to ping-pong-safe maximum
+        if order_value > max_safe_value:
+            self._pair_logger.info(
+                f"Ping-pong guard: order {order_value:.2f} → {max_safe_value:.2f} "
+                f"(max safe {max_safe_base:.1f} base)"
+            )
+            order_value = max_safe_value
+
+        # Cap to real balance (buffer already applied)
+        real_base, real_quote = self.balance_gate.get_real_balances()
+        usable_base = real_base * self.config.balance_buffer_pct
+        usable_quote = real_quote * self.config.balance_buffer_pct
 
         weights = [self.config.size_decay ** i for i in range(self.config.num_levels)]
         total_weight = sum(weights)
@@ -329,6 +411,7 @@ class DeltaDefiAMM(StrategyV2Base):
         for i in range(self.config.num_levels):
             base_spread = self.config.base_spread_bps * (self.config.spread_multiplier ** i) / D("10000")
             w = weights[i] / total_weight
+            layer_value = order_value * w
 
             if self.config.enable_asymmetric_spread:
                 bid_spread, ask_spread = self._asymmetric_spreads(base_spread)
@@ -338,8 +421,12 @@ class DeltaDefiAMM(StrategyV2Base):
             ask_price = mid_price * (D(1) + ask_spread)
             bid_price = mid_price * (D(1) - bid_spread)
 
-            ask_size = total_ask_budget * w
-            bid_size = (total_bid_budget * w) / bid_price if bid_price > ZERO else ZERO
+            ask_size = layer_value / ask_price if ask_price > ZERO else ZERO
+            bid_size = layer_value / bid_price if bid_price > ZERO else ZERO
+
+            # Cap each side to real balance
+            ask_size = min(ask_size, usable_base)
+            bid_size = min(bid_size, usable_quote / bid_price) if bid_price > ZERO else ZERO
 
             if self.config.enable_order_randomization:
                 ask_size = self._randomize(ask_size)
@@ -408,7 +495,7 @@ class DeltaDefiAMM(StrategyV2Base):
         # 1. Loss limit exceeded → full stop
         pnl = self._get_pnl()
         if pnl is not None and pnl < -self.config.max_cumulative_loss:
-            self.logger().error(f"Loss limit exceeded: P&L {pnl:.2f}. Shutting down.")
+            self._pair_logger.error(f"Loss limit exceeded: P&L {pnl:.2f}. Shutting down.")
             self._cancel_all_orders()
             self._stopped = True
             return True
@@ -417,7 +504,7 @@ class DeltaDefiAMM(StrategyV2Base):
         base_pct = self.pool.base / self.pool.initial_base
         quote_pct = self.pool.quote / self.pool.initial_quote
         if base_pct < self.config.min_both_sides_pct and quote_pct < self.config.min_both_sides_pct:
-            self.logger().warning("Both virtual sides depleted. Pausing.")
+            self._pair_logger.warning("Both virtual sides depleted. Pausing.")
             self._cancel_all_orders()
             return True
 
@@ -430,7 +517,7 @@ class DeltaDefiAMM(StrategyV2Base):
             buy_count = sum(1 for _, t in self._recent_fills if t == TradeType.BUY)
             sell_count = sum(1 for _, t in self._recent_fills if t == TradeType.SELL)
             if max(buy_count, sell_count) >= self.config.fill_velocity_max_same_side:
-                self.logger().warning(f"Fill velocity: {buy_count}B/{sell_count}S in {window}s. Pausing.")
+                self._pair_logger.warning(f"Fill velocity: {buy_count}B/{sell_count}S in {window}s. Pausing.")
                 self._cancel_all_orders()
                 return True
 
@@ -438,7 +525,7 @@ class DeltaDefiAMM(StrategyV2Base):
 
     # ---- Rebalance --------------------------------------------------------
 
-    def _check_rebalance(self):
+    async def _check_rebalance(self):
         if time.time() - self._last_rebalance < self.config.rebalance_cooldown:
             return
 
@@ -446,7 +533,7 @@ class DeltaDefiAMM(StrategyV2Base):
         if book_mid is None or book_mid <= ZERO:
             return
 
-        amm_mid = self.pool.get_mid_price()
+        amm_mid = self.pool.get_mid_price(self.config.pool_price_weight)
         divergence = abs(amm_mid - book_mid) / book_mid
 
         if divergence <= self.config.rebalance_threshold:
@@ -469,12 +556,31 @@ class DeltaDefiAMM(StrategyV2Base):
         if rebalance_amount <= ZERO:
             return
 
-        self.logger().info(f"Rebalance: {side.name} {rebalance_amount} (divergence: {divergence:.4f})")
+        # Ensure all existing orders are cancelled before placing rebalance MARKET order.
+        # Without this, the MARKET order can land while stale LIMIT orders are still live.
+        active_orders = self.get_active_orders(connector_name=self.config.exchange)
+        if active_orders:
+            results = await connector.cancel_all(timeout_seconds=10.0)
+            if results and any(not r.success for r in results):
+                self._pair_logger.warning("Rebalance aborted — cancel_all failed, orders still live on exchange.")
+                return
+
+        self._pair_logger.info(f"Rebalance: {side.name} {rebalance_amount} (divergence: {divergence:.4f})")
         if side == TradeType.BUY:
             self.buy(self.config.exchange, self.config.trading_pair, rebalance_amount, OrderType.MARKET)
         else:
             self.sell(self.config.exchange, self.config.trading_pair, rebalance_amount, OrderType.MARKET)
         self._last_rebalance = time.time()
+
+    # ---- Anchor EMA -------------------------------------------------------
+
+    def _update_anchor_ema(self, book_mid: Decimal):
+        """Smooth anchor tracking via EMA to prevent jitter."""
+        if self.pool.anchor_price and self.pool.anchor_price > ZERO:
+            alpha = self.config.anchor_ema_alpha
+            self.pool.anchor_price = alpha * book_mid + (D(1) - alpha) * self.pool.anchor_price
+        else:
+            self.pool.anchor_price = book_mid
 
     # ---- Fill handling ----------------------------------------------------
 
@@ -500,9 +606,11 @@ class DeltaDefiAMM(StrategyV2Base):
         # Log
         pnl = self._get_pnl()
         pnl_str = f"{pnl:+.4f}" if pnl is not None else "n/a"
+        pool_price = self.pool.get_pool_price()
+        kp_str = f"{pool_price:.6f}" if pool_price else "n/a"
         msg = (
             f"AMM {event.trade_type.name} {event.amount:.4f} @ {event.price:.6f} | "
-            f"P&L: {pnl_str}"
+            f"P&L: {pnl_str} | k-price: {kp_str}"
         )
         self.log_with_clock(logging.INFO, msg)
         self.notify_hb_app_with_timestamp(msg)
@@ -521,20 +629,19 @@ class DeltaDefiAMM(StrategyV2Base):
             # Update anchor BEFORE cancelling — after cancel, book may be thin
             book_mid = self._get_book_mid()
             if book_mid:
-                self.pool.anchor_price = book_mid
+                self._update_anchor_ema(book_mid)
 
             results = await connector.cancel_all(timeout_seconds=10.0)
 
             # Abort if cancel failed — old orders are still live on exchange;
             # placing new orders would create duplicates that can self-trade.
             if results and any(not r.success for r in results):
-                self.logger().warning("cancel_all had failures — skipping requote to avoid duplicate orders.")
+                self._pair_logger.warning("cancel_all had failures — skipping requote to avoid duplicate orders.")
                 return
 
-            mid = self.pool.get_mid_price()
+            mid = self.pool.get_mid_price(self.config.pool_price_weight)
             RateOracle.get_instance().set_price(self.config.trading_pair, mid)
-            base_avail, quote_avail = self.pool.get_available_reserves(self.config.floor_ratio)
-            orders = self._generate_orders(mid, base_avail, quote_avail)
+            orders = self._generate_orders(mid)
             orders = self.balance_gate.scale_orders(orders)
             order_ids = self._place_orders(orders)
             self._refresh_timestamp = self.current_timestamp + self.config.order_refresh_time
@@ -545,7 +652,7 @@ class DeltaDefiAMM(StrategyV2Base):
             # duplicate orders that cross and self-trade.
             await self._await_order_confirmations(order_ids)
         except Exception:
-            self.logger().network("Error in refresh after fill.", exc_info=True)
+            self._pair_logger.error("Error in refresh after fill.", exc_info=True)
         finally:
             self._refreshing = False
 
@@ -589,7 +696,7 @@ class DeltaDefiAMM(StrategyV2Base):
         self.pool = VirtualPool(mid, pool_depth, self.config.amplification)
         self._pool_scaled = True
         self._save_state()
-        self.logger().info(
+        self._pair_logger.info(
             f"Initialized pool from account balance: "
             f"{self.config.trading_pair} @ {mid} depth={pool_depth:.0f}"
         )
@@ -605,7 +712,7 @@ class DeltaDefiAMM(StrategyV2Base):
         book_mid = self._get_book_mid()
         if book_mid:
             self.pool.anchor_price = book_mid
-        mid = self.pool.get_mid_price()
+        mid = self.pool.get_mid_price()  # no weight — use anchor for scaling
         if mid is None or mid <= ZERO:
             return
 
@@ -629,9 +736,9 @@ class DeltaDefiAMM(StrategyV2Base):
         self._base_flow *= scale
         self._quote_flow *= scale
         self._save_state()
-        self.logger().info(
+        self._pair_logger.info(
             f"Auto-scaled pool to account balance: "
-            f"{old_depth:.0f} → {self.pool.initial_quote:.0f} ({scale:.2f}x)"
+            f"{old_depth:.0f} -> {self.pool.initial_quote:.0f} ({scale:.2f}x)"
         )
 
     # ---- State persistence ------------------------------------------------
@@ -650,7 +757,7 @@ class DeltaDefiAMM(StrategyV2Base):
             with open(self._state_file) as f:
                 return json.load(f)
         except (json.JSONDecodeError, KeyError, IOError) as e:
-            self.logger().warning(f"Failed to load state from {self._state_file}: {e}")
+            self._pair_logger.warning(f"Failed to load state from {self._state_file}: {e}")
             return {}
 
     # ---- Status display ---------------------------------------------------
@@ -659,9 +766,13 @@ class DeltaDefiAMM(StrategyV2Base):
         if not self.ready_to_trade:
             return "Market connectors are not ready."
 
-        pool_mid = self.pool.get_mid_price()
+        w = self.config.pool_price_weight
+        blended_mid = self.pool.get_mid_price(w)
+        anchor_mid = self.pool.get_mid_price(ZERO)
+        pool_price = self.pool.get_pool_price()
         book_mid = self._get_book_mid()
         book_str = f"{book_mid:.6f}" if book_mid else "n/a"
+        kp_str = f"{pool_price:.6f}" if pool_price else "n/a"
 
         base_pct = self.pool.base / self.pool.initial_base * D(100)
         quote_pct = self.pool.quote / self.pool.initial_quote * D(100)
@@ -673,14 +784,25 @@ class DeltaDefiAMM(StrategyV2Base):
         pnl = self._get_pnl()
         pnl_str = f"{pnl:+.4f}" if pnl is not None else "n/a"
 
+        total_capital = real_base * blended_mid + real_quote
+        order_value = total_capital * self.config.order_amount_pct
+        max_safe_str = f"{self._last_max_safe:.1f}" if self._last_max_safe > ZERO else "n/a"
+        max_safe_value = self._last_max_safe * blended_mid if self._last_max_safe > ZERO else ZERO
+        capped = order_value > max_safe_value and max_safe_value > ZERO
+        guard_str = f"CAPPED to {max_safe_value:.1f}" if capped else "ok"
+
         lines = [
-            f"  [AMM {self.config.trading_pair}] Anchor: {book_str} | Pool: {pool_mid:.6f}",
+            f"  [AMM {self.config.trading_pair}] Mid: {blended_mid:.6f} "
+            f"({w * 100:.0f}% AMM / {(1 - w) * 100:.0f}% PMM)",
+            f"  Anchor: {book_str} | k-price: {kp_str} | PMM-mid: {anchor_mid:.6f}",
             f"  VPool: {base_pct:.1f}%B / {quote_pct:.1f}%Q | Skew: {skew:+.3f}",
-            f"  Real: {real_base:.2f} {base_token} / {real_quote:.2f} {quote_token}",
+            f"  Real: {real_base:.2f} {base_token} / {real_quote:.2f} {quote_token}"
+            f" | Capital: {total_capital:.1f} {quote_token}",
+            f"  Order: {self.config.order_amount_pct * 100:.1f}% = {order_value:.1f} {quote_token}"
+            f" | Guard: {max_safe_str} {base_token} ({guard_str})",
             f"  P&L: {pnl_str} {quote_token} (limit: -{self.config.max_cumulative_loss})",
         ]
 
-        # Break-even tracking
         if self._stopped:
             lines.append("  *** STOPPED - loss limit exceeded ***")
 
