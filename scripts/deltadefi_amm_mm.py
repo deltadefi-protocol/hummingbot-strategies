@@ -58,14 +58,10 @@ class DeltaDefiAMMConfig(BaseClientModel):
     num_levels: int = Field(1)
     size_decay: Decimal = Field(D("0.85"))
     spread_multiplier: Decimal = Field(D("1.5"))
-    order_amount_pct: Decimal = Field(D("0.005"))
+    order_safe_ratio: Decimal = Field(D("0.5"))
     order_refresh_time: int = Field(5)
     refresh_on_fill_only: bool = Field(True)
-    floor_ratio: Decimal = Field(D("0.30"))
     balance_buffer_pct: Decimal = Field(D("0.90"))
-    rebalance_threshold: Decimal = Field(D("0.02"))
-    rebalance_cooldown: int = Field(60)
-    min_both_sides_pct: Decimal = Field(D("0.40"))
     # Hybrid pricing: 0=pure PMM (anchor), 1=pure AMM (k-price)
     pool_price_weight: Decimal = Field(D("0.70"))
     anchor_ema_alpha: Decimal = Field(D("0.05"))
@@ -78,6 +74,9 @@ class DeltaDefiAMMConfig(BaseClientModel):
     min_spread_bps: Decimal = Field(D("20"))
     enable_order_randomization: bool = Field(False)
     randomization_pct: Decimal = Field(D("0.15"))
+    enable_momentum_spread: bool = Field(True)
+    momentum_window_sec: int = Field(300)
+    momentum_spread_bps: Decimal = Field(D("10"))
 
     @model_validator(mode="after")
     def apply_pair_presets(self):
@@ -90,6 +89,8 @@ class DeltaDefiAMMConfig(BaseClientModel):
             raise ValueError("anchor_ema_alpha must be in (0, 1]")
         if self.amplification < D(1):
             raise ValueError("amplification must be >= 1")
+        if not (ZERO < self.order_safe_ratio <= D(1)):
+            raise ValueError("order_safe_ratio must be in (0, 1]")
         return self
 
 
@@ -186,12 +187,6 @@ class VirtualPool:
             return 0.0
         return (base_ratio - quote_ratio) / denom
 
-    def get_available_reserves(self, floor_ratio: Decimal):
-        floor = D(str(floor_ratio))
-        base_avail = max(ZERO, self.base - self.initial_base * floor)
-        quote_avail = max(ZERO, self.quote - self.initial_quote * floor)
-        return base_avail, quote_avail
-
 
 # ---------------------------------------------------------------------------
 # BalanceGate — scales orders to real account balance
@@ -257,7 +252,6 @@ class DeltaDefiAMM(StrategyV2Base):
     _default_config = DeltaDefiAMMConfig()
     markets = {_default_config.exchange: {_default_config.trading_pair}}
     _refresh_timestamp: float = 0
-    _last_rebalance: float = 0
     _stopped: bool = False
     _refreshing: bool = False
     _pool_scaled: bool = False
@@ -308,7 +302,7 @@ class DeltaDefiAMM(StrategyV2Base):
             self._quote_flow = ZERO
 
         self.balance_gate = BalanceGate(connectors[self.config.exchange], self.config)
-        self._recent_fills: deque = deque()
+        self._recent_fills: deque = deque(maxlen=1000)
         self._last_max_safe: Decimal = ZERO  # updated each order cycle
 
     # ---- Main loop --------------------------------------------------------
@@ -366,7 +360,6 @@ class DeltaDefiAMM(StrategyV2Base):
         orders = self.balance_gate.scale_orders(orders)
         self._place_orders(orders)
 
-        safe_ensure_future(self._check_rebalance())
         self._refresh_timestamp = self.current_timestamp + self.config.order_refresh_time
 
     # ---- Order generation -------------------------------------------------
@@ -396,21 +389,9 @@ class DeltaDefiAMM(StrategyV2Base):
     def _generate_orders(self, mid_price: Decimal) -> List[OrderProposal]:
         orders: List[OrderProposal] = []
 
-        # Single balance lookup for both order sizing and capping
-        real_base, real_quote = self.balance_gate.get_real_balances()
-        total_capital = real_base * mid_price + real_quote
-        order_value = total_capital * self.config.order_amount_pct
-
         max_safe_base = self._max_safe_order_base()
-        max_safe_value = max_safe_base * mid_price
-
-        # Cap order value to ping-pong-safe maximum
-        if order_value > max_safe_value:
-            self._pair_logger.info(
-                f"Ping-pong guard: order {order_value:.2f} → {max_safe_value:.2f} "
-                f"(max safe {max_safe_base:.1f} base)"
-            )
-            order_value = max_safe_value
+        order_base = max_safe_base * self.config.order_safe_ratio
+        order_value = order_base * mid_price
 
         weights = [self.config.size_decay ** i for i in range(self.config.num_levels)]
         total_weight = sum(weights)
@@ -419,6 +400,8 @@ class DeltaDefiAMM(StrategyV2Base):
 
         connector = self.connectors[self.config.exchange]
         pair = self.config.trading_pair
+
+        momentum_bid_extra, momentum_ask_extra = self._momentum_spread_adjustment()
 
         for i in range(self.config.num_levels):
             base_spread = self.config.base_spread_bps * (self.config.spread_multiplier ** i) / D("10000")
@@ -429,6 +412,9 @@ class DeltaDefiAMM(StrategyV2Base):
                 bid_spread, ask_spread = self._asymmetric_spreads(base_spread)
             else:
                 bid_spread, ask_spread = base_spread, base_spread
+
+            bid_spread += momentum_bid_extra
+            ask_spread += momentum_ask_extra
 
             ask_price = mid_price * (D(1) + ask_spread)
             bid_price = mid_price * (D(1) - bid_spread)
@@ -460,6 +446,26 @@ class DeltaDefiAMM(StrategyV2Base):
         bid_spread = max(base_spread * (D(1) + skew * sens), floor)
         ask_spread = max(base_spread * (D(1) - skew * sens), floor)
         return bid_spread, ask_spread
+
+    def _momentum_spread_adjustment(self):
+        """Extra spread (bid_extra, ask_extra) based on recent fill direction.
+
+        Consecutive sells → market rising → widen asks to avoid selling into momentum.
+        Consecutive buys  → market falling → widen bids to avoid buying into momentum.
+        """
+        if not self.config.enable_momentum_spread:
+            return ZERO, ZERO
+        now = time.time()
+        window = self.config.momentum_window_sec
+        buys = sum(1 for ts, t in self._recent_fills if t == TradeType.BUY and now - ts <= window)
+        sells = sum(1 for ts, t in self._recent_fills if t == TradeType.SELL and now - ts <= window)
+        net = sells - buys  # positive = rising (more sells), negative = falling (more buys)
+        extra_bps = self.config.momentum_spread_bps / D("10000")
+        if net > 0:
+            return ZERO, extra_bps * net
+        elif net < 0:
+            return extra_bps * abs(net), ZERO
+        return ZERO, ZERO
 
     def _randomize(self, size: Decimal) -> Decimal:
         pct = float(self.config.randomization_pct)
@@ -508,77 +514,28 @@ class DeltaDefiAMM(StrategyV2Base):
             self._stopped = True
             return True
 
-        # 2. Both virtual sides depleted → pause
-        base_pct = self.pool.base / self.pool.initial_base
-        quote_pct = self.pool.quote / self.pool.initial_quote
-        if base_pct < self.config.min_both_sides_pct and quote_pct < self.config.min_both_sides_pct:
-            self._pair_logger.warning("Both virtual sides depleted. Pausing.")
-            self._cancel_all_orders()
-            return True
+        # 2. Prune fills older than the longest active window
+        now = time.time()
+        max_window = 0
+        if self.config.enable_fill_velocity_detector:
+            max_window = max(max_window, self.config.fill_velocity_window_sec)
+        if self.config.enable_momentum_spread:
+            max_window = max(max_window, self.config.momentum_window_sec)
+        if max_window > 0:
+            while self._recent_fills and now - self._recent_fills[0][0] > max_window:
+                self._recent_fills.popleft()
 
         # 3. Fill velocity (enhancement)
         if self.config.enable_fill_velocity_detector:
-            now = time.time()
-            window = self.config.fill_velocity_window_sec
-            while self._recent_fills and now - self._recent_fills[0][0] > window:
-                self._recent_fills.popleft()
-            buy_count = sum(1 for _, t in self._recent_fills if t == TradeType.BUY)
-            sell_count = sum(1 for _, t in self._recent_fills if t == TradeType.SELL)
+            vel_window = self.config.fill_velocity_window_sec
+            buy_count = sum(1 for ts, t in self._recent_fills if t == TradeType.BUY and now - ts <= vel_window)
+            sell_count = sum(1 for ts, t in self._recent_fills if t == TradeType.SELL and now - ts <= vel_window)
             if max(buy_count, sell_count) >= self.config.fill_velocity_max_same_side:
-                self._pair_logger.warning(f"Fill velocity: {buy_count}B/{sell_count}S in {window}s. Pausing.")
+                self._pair_logger.warning(f"Fill velocity: {buy_count}B/{sell_count}S in {vel_window}s. Pausing.")
                 self._cancel_all_orders()
                 return True
 
         return False
-
-    # ---- Rebalance --------------------------------------------------------
-
-    async def _check_rebalance(self):
-        if time.time() - self._last_rebalance < self.config.rebalance_cooldown:
-            return
-
-        book_mid = self._get_book_mid()
-        if book_mid is None or book_mid <= ZERO:
-            return
-
-        amm_mid = self.pool.get_mid_price(self.config.pool_price_weight)
-        divergence = abs(amm_mid - book_mid) / book_mid
-
-        if divergence <= self.config.rebalance_threshold:
-            return
-
-        target_base = (self.pool.k / book_mid).sqrt()
-        rebalance_amount = abs(target_base - self.pool.base)
-        side = TradeType.BUY if self.pool.base < target_base else TradeType.SELL
-
-        # Cap to real balance
-        real_base, real_quote = self.balance_gate.get_real_balances()
-        if side == TradeType.BUY:
-            max_amount = real_quote * self.config.balance_buffer_pct / book_mid
-        else:
-            max_amount = real_base * self.config.balance_buffer_pct
-        rebalance_amount = min(rebalance_amount, max_amount)
-
-        connector = self.connectors[self.config.exchange]
-        rebalance_amount = connector.quantize_order_amount(self.config.trading_pair, rebalance_amount)
-        if rebalance_amount <= ZERO:
-            return
-
-        # Ensure all existing orders are cancelled before placing rebalance MARKET order.
-        # Without this, the MARKET order can land while stale LIMIT orders are still live.
-        active_orders = self.get_active_orders(connector_name=self.config.exchange)
-        if active_orders:
-            results = await connector.cancel_all(timeout_seconds=10.0)
-            if results and any(not r.success for r in results):
-                self._pair_logger.warning("Rebalance aborted — cancel_all failed, orders still live on exchange.")
-                return
-
-        self._pair_logger.info(f"Rebalance: {side.name} {rebalance_amount} (divergence: {divergence:.4f})")
-        if side == TradeType.BUY:
-            self.buy(self.config.exchange, self.config.trading_pair, rebalance_amount, OrderType.MARKET)
-        else:
-            self.sell(self.config.exchange, self.config.trading_pair, rebalance_amount, OrderType.MARKET)
-        self._last_rebalance = time.time()
 
     # ---- Anchor EMA -------------------------------------------------------
 
@@ -604,8 +561,8 @@ class DeltaDefiAMM(StrategyV2Base):
         # Update virtual pool
         self.pool.update_on_fill(event.trade_type, event.amount)
 
-        # Track fill velocity
-        if self.config.enable_fill_velocity_detector:
+        # Track fills for velocity detector and/or momentum spread
+        if self.config.enable_fill_velocity_detector or self.config.enable_momentum_spread:
             self._recent_fills.append((time.time(), event.trade_type))
 
         # Persist state
@@ -785,16 +742,27 @@ class DeltaDefiAMM(StrategyV2Base):
 
         real_base, real_quote = self.balance_gate.get_real_balances()
         base_token, quote_token = self.config.trading_pair.split("-")
+        total_capital = real_base * blended_mid + real_quote
 
         pnl = self._get_pnl()
         pnl_str = f"{pnl:+.4f}" if pnl is not None else "n/a"
 
-        total_capital = real_base * blended_mid + real_quote
-        order_value = total_capital * self.config.order_amount_pct
         max_safe_str = f"{self._last_max_safe:.1f}" if self._last_max_safe > ZERO else "n/a"
-        max_safe_value = self._last_max_safe * blended_mid if self._last_max_safe > ZERO else ZERO
-        capped = order_value > max_safe_value and max_safe_value > ZERO
-        guard_str = f"CAPPED to {max_safe_value:.1f}" if capped else "ok"
+        order_base = self._last_max_safe * self.config.order_safe_ratio if self._last_max_safe > ZERO else ZERO
+        order_value = order_base * blended_mid
+
+        momentum_bid_extra, momentum_ask_extra = self._momentum_spread_adjustment()
+        now = time.time()
+        m_window = self.config.momentum_window_sec
+        m_buys = sum(1 for ts, t in self._recent_fills if t == TradeType.BUY and now - ts <= m_window)
+        m_sells = sum(1 for ts, t in self._recent_fills if t == TradeType.SELL and now - ts <= m_window)
+        m_net = m_sells - m_buys
+        if m_net > 0:
+            momentum_str = f"+{m_net} sells -> ASK +{momentum_ask_extra * D('10000'):.0f}bps"
+        elif m_net < 0:
+            momentum_str = f"+{abs(m_net)} buys -> BID +{momentum_bid_extra * D('10000'):.0f}bps"
+        else:
+            momentum_str = "neutral"
 
         lines = [
             f"  [AMM {self.config.trading_pair}] Mid: {blended_mid:.6f} "
@@ -803,8 +771,10 @@ class DeltaDefiAMM(StrategyV2Base):
             f"  VPool: {base_pct:.1f}%B / {quote_pct:.1f}%Q | Skew: {skew:+.3f}",
             f"  Real: {real_base:.2f} {base_token} / {real_quote:.2f} {quote_token}"
             f" | Capital: {total_capital:.1f} {quote_token}",
-            f"  Order: {self.config.order_amount_pct * 100:.1f}% = {order_value:.1f} {quote_token}"
-            f" | Guard: {max_safe_str} {base_token} ({guard_str})",
+            f"  Order: {self.config.order_safe_ratio * 100:.0f}% of max_safe"
+            f" = {order_base:.1f} {base_token} ({order_value:.1f} {quote_token})"
+            f" | max_safe: {max_safe_str} {base_token}",
+            f"  Momentum ({m_window}s): {momentum_str}",
             f"  P&L: {pnl_str} {quote_token} (limit: -{self.config.max_cumulative_loss})",
         ]
 
