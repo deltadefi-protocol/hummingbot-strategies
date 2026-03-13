@@ -44,15 +44,24 @@ class DeltaDefiAMMConfig(StrategyV2ConfigBase):
     script_file_name: str = os.path.basename(__file__)
     # Required (must set per pair)
     exchange: str = Field("deltadefi")
-    trading_pair: str = Field(default="ADA-USDM")
+    trading_pair: str = Field(default="ADA-USDM", json_schema_extra={
+        "prompt": lambda mi: "Trading pair (e.g. ADA-USDM, NIGHT-USDM)",
+        "prompt_on_new": True})
     initial_price: Optional[Decimal] = Field(default=None)
     base_spread_bps: Decimal = Field(D("40"))
     max_cumulative_loss: Decimal = Field(D("500"))
     min_base_balance: Decimal = Field(D("1000"))
     min_quote_balance: Decimal = Field(D("500"))
     # Budget caps: max base/quote this strategy may use. None = use all available.
-    max_base_budget: Optional[Decimal] = Field(default=None)
-    max_quote_budget: Optional[Decimal] = Field(default=None)
+    max_base_budget: Optional[Decimal] = Field(default=None, json_schema_extra={
+        "prompt": lambda mi: "Max base asset budget for this strategy (e.g. 370370). Leave empty for no limit",
+        "prompt_on_new": True})
+    max_quote_budget: Optional[Decimal] = Field(default=None, json_schema_extra={
+        "prompt": lambda mi: "Max quote asset budget for this strategy (e.g. 100000). Leave empty for no limit",
+        "prompt_on_new": True})
+    # Decimal precision overrides. None = use exchange trading rules.
+    price_decimals: Optional[int] = Field(default=None)
+    amount_decimals: Optional[int] = Field(default=None)
     # Amplification: flattens k-price sensitivity per fill.
     # A=1: standard x*y=k, A=20: price shifts 20x slower.
     # Pool is initialized to match real capital; A controls how
@@ -434,10 +443,10 @@ class DeltaDefiAMM(StrategyV2Base):
                 ask_size = self._randomize(ask_size)
                 bid_size = self._randomize(bid_size)
 
-            ask_price = connector.quantize_order_price(pair, ask_price)
-            bid_price = connector.quantize_order_price(pair, bid_price)
-            ask_size = connector.quantize_order_amount(pair, ask_size)
-            bid_size = connector.quantize_order_amount(pair, bid_size)
+            ask_price = self._quantize_price(connector, pair, ask_price)
+            bid_price = self._quantize_price(connector, pair, bid_price)
+            ask_size = self._quantize_amount(connector, pair, ask_size)
+            bid_size = self._quantize_amount(connector, pair, bid_size)
 
             if ask_size > ZERO:
                 orders.append(OrderProposal(TradeType.SELL, ask_price, ask_size))
@@ -479,6 +488,16 @@ class DeltaDefiAMM(StrategyV2Base):
         pct = float(self.config.randomization_pct)
         jitter = D(str(1.0 + random.uniform(-pct, pct)))
         return max(ZERO, size * jitter)
+
+    def _quantize_price(self, connector: ConnectorBase, pair: str, price: Decimal) -> Decimal:
+        if self.config.price_decimals is not None:
+            return round(price, self.config.price_decimals)
+        return connector.quantize_order_price(pair, price)
+
+    def _quantize_amount(self, connector: ConnectorBase, pair: str, amount: Decimal) -> Decimal:
+        if self.config.amount_decimals is not None:
+            return round(amount, self.config.amount_decimals)
+        return connector.quantize_order_amount(pair, amount)
 
     # ---- Order execution --------------------------------------------------
 
