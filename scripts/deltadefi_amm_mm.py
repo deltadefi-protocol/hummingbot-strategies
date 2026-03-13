@@ -50,6 +50,9 @@ class DeltaDefiAMMConfig(BaseClientModel):
     max_cumulative_loss: Decimal = Field(D("500"))
     min_base_balance: Decimal = Field(D("1000"))
     min_quote_balance: Decimal = Field(D("500"))
+    # Budget caps: max base/quote this strategy may use. None = use all available.
+    max_base_budget: Optional[Decimal] = Field(default=None)
+    max_quote_budget: Optional[Decimal] = Field(default=None)
     # Amplification: flattens k-price sensitivity per fill.
     # A=1: standard x*y=k, A=20: price shifts 20x slower.
     # Pool is initialized to match real capital; A controls how
@@ -203,10 +206,13 @@ class BalanceGate:
 
     def get_real_balances(self):
         base_token, quote_token = self.config.trading_pair.split("-")
-        return (
-            self.connector.get_available_balance(base_token),
-            self.connector.get_available_balance(quote_token),
-        )
+        base_bal = self.connector.get_available_balance(base_token)
+        quote_bal = self.connector.get_available_balance(quote_token)
+        if self.config.max_base_budget is not None:
+            base_bal = min(base_bal, self.config.max_base_budget)
+        if self.config.max_quote_budget is not None:
+            quote_bal = min(quote_bal, self.config.max_quote_budget)
+        return base_bal, quote_bal
 
     def scale_orders(self, orders: List[OrderProposal]) -> List[OrderProposal]:
         real_base, real_quote = self.get_real_balances()
