@@ -704,7 +704,11 @@ class DeltaDefiAMM(StrategyV2Base):
 
         real_total = real_base * mid + real_quote
         target_depth = real_total  # pool matches real capital
-        pool_total = self.pool.initial_base * mid + self.pool.initial_quote
+        # VirtualPool stores pool_depth as initial_quote; initial_base is
+        # derived (pool_depth / price), so initial_base*mid + initial_quote
+        # would be 2× pool_depth.  Compare against initial_quote to stay
+        # consistent with how _init_pool_from_balance creates the pool.
+        pool_total = self.pool.initial_quote
         if pool_total <= ZERO:
             return
 
