@@ -11,13 +11,13 @@ from typing import Dict, List, NamedTuple, Optional
 
 from pydantic import Field, model_validator
 
-from hummingbot.client.config.config_data_types import BaseClientModel
+from hummingbot.client.settings import DEFAULT_LOG_FILE_PATH
 from hummingbot.connector.connector_base import ConnectorBase
 from hummingbot.core.data_type.common import OrderType, TradeType
 from hummingbot.core.event.events import OrderFilledEvent
 from hummingbot.core.rate_oracle.rate_oracle import RateOracle
 from hummingbot.core.utils.async_utils import safe_ensure_future
-from hummingbot.strategy.strategy_v2_base import StrategyV2Base
+from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase
 
 D = Decimal
 ZERO = D("0")
@@ -40,7 +40,7 @@ class OrderProposal(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
-class DeltaDefiAMMConfig(BaseClientModel):
+class DeltaDefiAMMConfig(StrategyV2ConfigBase):
     script_file_name: str = os.path.basename(__file__)
     # Required (must set per pair)
     exchange: str = Field("deltadefi")
@@ -276,7 +276,7 @@ class DeltaDefiAMM(StrategyV2Base):
         self._pair_logger = logging.getLogger(f"{__name__}.{pair_tag}")
         self._pair_logger.propagate = False  # Don't duplicate to root/parent handler
 
-        logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+        logs_dir = str(DEFAULT_LOG_FILE_PATH)
         os.makedirs(logs_dir, exist_ok=True)
         pair_log_file = os.path.join(logs_dir, f"logs_deltadefi_amm_mm_{pair_tag}.log")
         if not self._pair_logger.handlers:
@@ -291,7 +291,9 @@ class DeltaDefiAMM(StrategyV2Base):
             self._pair_logger.addHandler(ch)
             self._pair_logger.setLevel(logging.DEBUG)
 
-        self._state_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state")
+        connector = connectors[self.config.exchange]
+        network = getattr(connector, "deltadefi_network", "mainnet")
+        self._state_dir = os.path.join(os.path.dirname(logs_dir), "state", network)
         os.makedirs(self._state_dir, exist_ok=True)
         self._state_file = os.path.join(self._state_dir, f"{self.config.trading_pair}_pool_state.json")
 
