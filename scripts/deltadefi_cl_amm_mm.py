@@ -97,6 +97,9 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
     range_ema_alpha: Decimal = Field(D("0.1"))
     range_update_dead_band_pct: Decimal = Field(D("0.5"))
 
+    # Soft recenter: re-anchor range when anchor drifts from range center
+    soft_recenter_drift_pct: Decimal = Field(D("2.0"))
+
     # Conditional rebalance after recenter
     enable_rebalance: bool = Field(True)
     rebalance_max_slippage_bps: Decimal = Field(D("30"))
@@ -545,12 +548,25 @@ class HMMRegimeDetector:
 # ---------------------------------------------------------------------------
 
 
+class RangeDecision(NamedTuple):
+    """Full breakdown of DynamicRangeController's decision pipeline."""
+    natr_mult: float
+    natr_adjusted_pct: float
+    adx_normalized: float
+    persistence: float
+    effective_trend: float
+    hmm_override: str          # "none", "ranging_dampen", "trending_floor"
+    raw_pct: float
+    smoothed_pct: Decimal
+
+
 class DynamicRangeController:
     """Combines NATR + ADX + Hurst + HMM into concentration_pct adjustments."""
 
     def __init__(self, config: DeltaDefiCLAMMConfig):
         self.config = config
         self._previous_smoothed_pct: Optional[Decimal] = None
+        self.last_decision: Optional[RangeDecision] = None
 
     def compute_concentration_pct(
         self,
@@ -567,8 +583,6 @@ class DynamicRangeController:
             natr_f = float(natr)
             baseline_f = float(cfg.natr_baseline)
             scale_f = float(cfg.natr_range_scale)
-            # natr/baseline gives linear scaling: 0.2%->0.4x, 0.5%->1x, 1.0%->2x
-            # natr_range_scale amplifies the deviation from 1.0
             deviation = (natr_f - baseline_f) / baseline_f if baseline_f > 0 else 0.0
             natr_mult = max(0.5, min(3.0, 1.0 + deviation * scale_f))
         else:
@@ -589,12 +603,15 @@ class DynamicRangeController:
         effective_trend = adx_normalized * max(0.0, 1.0 + persistence)
 
         # Step 4: HMM regime override
+        hmm_override = "none"
         if hmm_probs is not None:
             threshold = float(cfg.hmm_confidence_threshold)
             if hmm_probs.get("ranging", 0) > threshold:
                 effective_trend *= 0.3
+                hmm_override = f"ranging_dampen({hmm_probs['ranging']:.0%})"
             elif hmm_probs.get("trending", 0) > threshold:
                 effective_trend = max(effective_trend, 0.5)
+                hmm_override = f"trending_floor({hmm_probs['trending']:.0%})"
 
         # Step 5: Final range with anti-oscillation
         trend_sens = float(cfg.trend_sensitivity)
@@ -609,6 +626,17 @@ class DynamicRangeController:
         else:
             smoothed = raw_pct
         self._previous_smoothed_pct = D(str(round(smoothed, 4)))
+
+        self.last_decision = RangeDecision(
+            natr_mult=round(natr_mult, 3),
+            natr_adjusted_pct=round(natr_adjusted_pct, 2),
+            adx_normalized=round(adx_normalized, 3),
+            persistence=round(persistence, 3),
+            effective_trend=round(effective_trend, 3),
+            hmm_override=hmm_override,
+            raw_pct=round(raw_pct, 2),
+            smoothed_pct=self._previous_smoothed_pct,
+        )
 
         return self._previous_smoothed_pct
 
@@ -753,6 +781,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
         self._last_max_safe: Decimal = ZERO
         self._rebalancing: bool = False
         self._last_rebalance_action: str = ""
+        self._indicator_log_counter: int = 0
 
     # ---- Main loop --------------------------------------------------------
 
@@ -779,15 +808,29 @@ class DeltaDefiCLAMM(StrategyV2Base):
         if book_mid:
             self._update_anchor_ema(book_mid)
 
-        # Range check: recenter if book mid exits bounds
+        # Hard recenter: book mid exits bounds
         if book_mid and not self.pool.is_in_range(book_mid):
             self._pair_logger.info(
-                f"Recentering: book_mid {book_mid:.6f} outside "
+                f"Hard recenter: book_mid {book_mid:.6f} outside "
                 f"[{self.pool.p_lower:.6f}, {self.pool.p_upper:.6f}]"
             )
             self.pool.recenter(book_mid)
             self._save_state()
             safe_ensure_future(self._conditional_rebalance(book_mid))
+
+        # Soft recenter: anchor drifted from range center (price still in range)
+        elif book_mid and self.config.soft_recenter_drift_pct > ZERO:
+            range_center = (self.pool.p_lower + self.pool.p_upper) / D(2)
+            if range_center > ZERO:
+                drift_pct = abs(self.pool.anchor_price - range_center) / range_center * D(100)
+                if drift_pct >= self.config.soft_recenter_drift_pct:
+                    self._pair_logger.info(
+                        f"Soft recenter: anchor {self.pool.anchor_price:.6f} drifted "
+                        f"{drift_pct:.2f}% from range center {range_center:.6f}"
+                    )
+                    self.pool.recenter(self.pool.anchor_price)
+                    self._save_state()
+                    safe_ensure_future(self._conditional_rebalance(self.pool.anchor_price))
 
         # Dynamic range update from indicators
         self._update_dynamic_range(connector)
@@ -845,8 +888,42 @@ class DeltaDefiCLAMM(StrategyV2Base):
             self._last_natr, self._last_adx, self._last_hurst, self._last_hmm,
         )
 
-        dead_band = self.config.range_update_dead_band_pct
-        if abs(new_pct - self.pool.concentration_pct) >= dead_band:
+        # Periodic indicator log (every 300 ticks ≈ 5 min)
+        self._indicator_log_counter += 1
+        decision = self._range_controller.last_decision
+        range_changed = abs(new_pct - self.pool.concentration_pct) >= self.config.range_update_dead_band_pct
+
+        if self._indicator_log_counter >= 300 or range_changed:
+            self._indicator_log_counter = 0
+            natr_str = f"{float(self._last_natr)*100:.3f}%" if self._last_natr is not None else "n/a"
+            adx_str = f"{float(self._last_adx):.1f}" if self._last_adx is not None else "n/a"
+            hurst_str = f"{float(self._last_hurst):.3f}" if self._last_hurst is not None else "n/a"
+            if self._last_hmm is not None:
+                top = max(self._last_hmm, key=self._last_hmm.get)
+                hmm_str = f"{top}({self._last_hmm[top]:.0%})"
+            else:
+                hmm_str = "n/a"
+            self._pair_logger.info(
+                f"Trend analysis [{len(candles)} candles]: "
+                f"NATR={natr_str} ADX={adx_str} Hurst={hurst_str} HMM={hmm_str}"
+            )
+            if decision is not None:
+                self._pair_logger.info(
+                    f"  Pipeline: natr_mult={decision.natr_mult:.2f} "
+                    f"natr_adj={decision.natr_adjusted_pct:.2f}% "
+                    f"adx_norm={decision.adx_normalized:.2f} "
+                    f"persist={decision.persistence:+.2f} "
+                    f"eff_trend={decision.effective_trend:.3f} "
+                    f"hmm_override={decision.hmm_override}"
+                )
+                self._pair_logger.info(
+                    f"  Result: raw={decision.raw_pct:.2f}% "
+                    f"smoothed={decision.smoothed_pct:.2f}% "
+                    f"current={self.pool.concentration_pct:.2f}% "
+                    f"{'-> UPDATING' if range_changed else '(within dead-band)'}"
+                )
+
+        if range_changed:
             old_pct = self.pool.concentration_pct
             self.pool.set_concentration(new_pct)
             self._save_state()
@@ -1203,6 +1280,24 @@ class DeltaDefiCLAMM(StrategyV2Base):
         except Exception:
             return None
 
+    def _get_anchor_drift_pct(self) -> Decimal:
+        """How far the anchor has drifted from the range center, in %."""
+        range_center = (self.pool.p_lower + self.pool.p_upper) / D(2)
+        if range_center <= ZERO:
+            return ZERO
+        return abs(self.pool.anchor_price - range_center) / range_center * D(100)
+
+    def _format_pipeline_status(self) -> str:
+        """One-line summary of the DynamicRangeController decision pipeline."""
+        d = self._range_controller.last_decision
+        if d is None:
+            return "    Pipeline: not yet computed"
+        return (
+            f"    Pipeline: natr_mult={d.natr_mult:.2f} → adj={d.natr_adjusted_pct:.1f}% | "
+            f"adx_norm={d.adx_normalized:.2f} × persist={d.persistence:+.2f} → eff_trend={d.effective_trend:.3f} | "
+            f"hmm={d.hmm_override} | raw={d.raw_pct:.1f}% → smooth={d.smoothed_pct:.1f}%"
+        )
+
     # ---- Pool auto-scaling ------------------------------------------------
 
     def _init_pool_from_balance(self) -> bool:
@@ -1339,7 +1434,9 @@ class DeltaDefiCLAMM(StrategyV2Base):
             f"  [CL-AMM {self.config.trading_pair}] Mid: {blended_mid:.6f} (w={w})",
             f"  Anchor: {anchor_str} | Book: {book_str} | Pool: {pool_str}",
             f"  Range: [{self.pool.p_lower:.6f}, {self.pool.p_upper:.6f}] "
-            f"(+-{self.pool.concentration_pct:.2f}%) | L: {self.pool.L:.0f}",
+            f"(+-{self.pool.concentration_pct:.2f}%) | L: {self.pool.L:.0f}"
+            f" | drift: {self._get_anchor_drift_pct():.2f}%"
+            f" (soft@{self.config.soft_recenter_drift_pct}%)",
             f"  VPool: {base_pct:.1f}%B / {quote_pct:.1f}%Q | Skew: {skew:+.3f}",
             f"  Real: {real_base:.2f} {base_token} / {real_quote:.2f} {quote_token}"
             f" | Capital: {total_capital:.1f} {quote_token}",
@@ -1348,6 +1445,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
             f" | max_safe: {max_safe_str} {base_token}",
             f"  Indicators ({candle_count} candles):",
             f"    NATR: {natr_str} | ADX: {adx_str} | Hurst: {hurst_str} | HMM: {hmm_str}",
+            self._format_pipeline_status(),
             f"  Momentum ({m_window}s): {momentum_str}",
             f"  Rebalance: {'enabled' if self.config.enable_rebalance else 'disabled'}"
             f"{' | last: ' + self._last_rebalance_action if self._last_rebalance_action else ''}",
