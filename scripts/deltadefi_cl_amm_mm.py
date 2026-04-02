@@ -97,6 +97,10 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
     range_ema_alpha: Decimal = Field(D("0.1"))
     range_update_dead_band_pct: Decimal = Field(D("0.5"))
 
+    # Trend protection
+    trend_order_scale_factor: Decimal = Field(D("0.0"))
+    trend_halt_threshold: Decimal = Field(D("0.0"))
+
     # Soft recenter: re-anchor range when anchor drifts from range center
     soft_recenter_drift_pct: Decimal = Field(D("2.0"))
 
@@ -954,8 +958,21 @@ class DeltaDefiCLAMM(StrategyV2Base):
     def _generate_orders(self, mid_price: Decimal) -> List[OrderProposal]:
         orders: List[OrderProposal] = []
 
+        # Trend protection
+        decision = self._range_controller.last_decision
+        eff_trend = decision.effective_trend if decision is not None else 0.0
+
+        halt_thresh = float(self.config.trend_halt_threshold)
+        if halt_thresh > 0 and eff_trend >= halt_thresh:
+            return orders  # empty
+
+        scale_factor = float(self.config.trend_order_scale_factor)
+        trend_scale = max(0.0, 1.0 - scale_factor * eff_trend)
+        if trend_scale <= 0.0:
+            return orders  # empty
+
         max_safe_base = self._max_safe_order_base()
-        order_base = max_safe_base * self.config.order_safe_ratio
+        order_base = max_safe_base * self.config.order_safe_ratio * D(str(round(trend_scale, 6)))
         order_value = order_base * mid_price
 
         weights = [self.config.size_decay ** i for i in range(self.config.num_levels)]
