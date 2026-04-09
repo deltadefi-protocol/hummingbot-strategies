@@ -193,10 +193,20 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         self.inventory_hard_spread_mult = D(str(config.get("inventory_hard_spread_mult", "1.80")))
         self.inventory_hard_disable_accumulation_side = bool(
             config.get("inventory_hard_disable_accumulation_side", True))
+
+        # FLAIR / LVR monitoring
+        self.enable_flair_monitor = bool(config.get("enable_flair_monitor", True))
+        self.flair_markout_sec = int(config.get("flair_markout_sec", 30))
+        self.flair_window_sec = int(config.get("flair_window_sec", 1800))
+        self.flair_fee_bps = D(str(config.get("flair_fee_bps", "10")))
         if self.toxicity_window_sec <= 0:
             raise ValueError("toxicity_window_sec must be > 0")
         if self.toxicity_activation_count <= 0:
             raise ValueError("toxicity_activation_count must be > 0")
+        if self.flair_markout_sec <= 0:
+            raise ValueError("flair_markout_sec must be > 0")
+        if self.flair_window_sec <= 0:
+            raise ValueError("flair_window_sec must be > 0")
         if not (ZERO < self.toxicity_buy_ratio_soft < D(1)):
             raise ValueError("toxicity_buy_ratio_soft must be in (0, 1)")
         if not (ZERO < self.toxicity_buy_ratio_hard < D(1)):
@@ -263,6 +273,14 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         self._trend_halted_count = 0
         self._toxicity_recent_fills: deque = deque(maxlen=2000)
         self._current_sim_time: float = 0.0
+        self._flair_pending: deque = deque(maxlen=50000)
+        self._flair_events: deque = deque(maxlen=100000)
+        self._flair_roll_fee = ZERO
+        self._flair_roll_lvr = ZERO
+        self._flair_roll_net = ZERO
+        self._flair_lifetime_fee = ZERO
+        self._flair_lifetime_lvr = ZERO
+        self._flair_lifetime_net = ZERO
 
     def initialize(self, initial_price: Decimal, base_balance: Decimal,
                    quote_balance: Decimal):
@@ -306,6 +324,7 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         self._trend_halted_this_candle = False
         self._trend_order_scale = 1.0
         price = candle.close
+        self._update_flair_metrics(sim_time, price)
 
         # Update anchor EMA
         self._update_anchor(price)
@@ -342,6 +361,7 @@ class CLAMMBacktestStrategy(BacktestStrategy):
     def on_fill(self, side: str, price: Decimal, amount: Decimal,
                 sim_time: float):
         self._toxicity_recent_fills.append((sim_time, TradeType.SELL if side == "sell" else TradeType.BUY))
+        self._queue_flair_markout(side, price, amount, sim_time)
         trade_type = TradeType.SELL if side == "sell" else TradeType.BUY
         self.pool.update_on_fill(trade_type, amount)
 
@@ -360,6 +380,7 @@ class CLAMMBacktestStrategy(BacktestStrategy):
 
         decision = self._range_ctrl.last_decision
         eff_trend_val = decision.effective_trend if decision is not None else 0.0
+        flair = self._flair_summary(self._current_sim_time)
 
         return {
             "mid_price": self.pool.get_mid_price(),
@@ -386,6 +407,16 @@ class CLAMMBacktestStrategy(BacktestStrategy):
             "toxicity_samples": float(self._get_toxicity_profile()["sample_count"]),
             "toxicity_buy_ratio": float(self._get_toxicity_profile()["buy_ratio"]),
             "toxicity_sell_ratio": float(self._get_toxicity_profile()["sell_ratio"]),
+            "flair_roll_fee": float(flair["roll_fee"]),
+            "flair_roll_lvr": float(flair["roll_lvr"]),
+            "flair_roll_net": float(flair["roll_net"]),
+            "flair_roll_ratio": float(flair["roll_ratio"]),
+            "flair_lifetime_fee": float(flair["lifetime_fee"]),
+            "flair_lifetime_lvr": float(flair["lifetime_lvr"]),
+            "flair_lifetime_net": float(flair["lifetime_net"]),
+            "flair_lifetime_ratio": float(flair["lifetime_ratio"]),
+            "flair_pending": float(flair["pending"]),
+            "flair_samples": float(flair["samples"]),
         }
 
     def get_portfolio_value(self, price: Decimal) -> Decimal:
@@ -605,6 +636,66 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         elif skew < ZERO:
             side = "buy"
         return {"skew": skew, "state": state, "accumulation_side": side}
+
+    def _queue_flair_markout(self, side: str, price: Decimal, amount: Decimal, sim_time: float):
+        if not self.enable_flair_monitor:
+            return
+        trade_type = TradeType.SELL if side == "sell" else TradeType.BUY
+        fee_quote = amount * price * self.flair_fee_bps / D("10000")
+        self._flair_pending.append((
+            sim_time + self.flair_markout_sec,
+            trade_type,
+            price,
+            amount,
+            fee_quote,
+        ))
+
+    def _prune_flair_window(self, sim_time: float):
+        while self._flair_events and sim_time - self._flair_events[0][0] > self.flair_window_sec:
+            _, fee_quote, lvr_quote, flair_net = self._flair_events.popleft()
+            self._flair_roll_fee -= fee_quote
+            self._flair_roll_lvr -= lvr_quote
+            self._flair_roll_net -= flair_net
+
+    def _update_flair_metrics(self, sim_time: float, fair_price: Decimal):
+        if not self.enable_flair_monitor or fair_price <= ZERO:
+            return
+        while self._flair_pending and self._flair_pending[0][0] <= sim_time:
+            _, side, fill_price, amount, fee_quote = self._flair_pending.popleft()
+            if side == TradeType.BUY:
+                lvr_quote = max(ZERO, amount * (fill_price - fair_price))
+            else:
+                lvr_quote = max(ZERO, amount * (fair_price - fill_price))
+            flair_net = fee_quote - lvr_quote
+
+            self._flair_lifetime_fee += fee_quote
+            self._flair_lifetime_lvr += lvr_quote
+            self._flair_lifetime_net += flair_net
+
+            self._flair_events.append((sim_time, fee_quote, lvr_quote, flair_net))
+            self._flair_roll_fee += fee_quote
+            self._flair_roll_lvr += lvr_quote
+            self._flair_roll_net += flair_net
+
+        self._prune_flair_window(sim_time)
+
+    def _flair_summary(self, sim_time: float) -> Dict[str, Decimal]:
+        self._prune_flair_window(sim_time)
+        eps = D("0.00000001")
+        roll_ratio = self._flair_roll_fee / max(self._flair_roll_lvr, eps) if self._flair_roll_fee > ZERO else ZERO
+        life_ratio = self._flair_lifetime_fee / max(self._flair_lifetime_lvr, eps) if self._flair_lifetime_fee > ZERO else ZERO
+        return {
+            "roll_fee": self._flair_roll_fee,
+            "roll_lvr": self._flair_roll_lvr,
+            "roll_net": self._flair_roll_net,
+            "roll_ratio": roll_ratio,
+            "lifetime_fee": self._flair_lifetime_fee,
+            "lifetime_lvr": self._flair_lifetime_lvr,
+            "lifetime_net": self._flair_lifetime_net,
+            "lifetime_ratio": life_ratio,
+            "pending": D(str(len(self._flair_pending))),
+            "samples": D(str(len(self._flair_events))),
+        }
 
     def _asymmetric_spreads(self, base_spread: Decimal):
         skew = D(str(self.pool.get_inventory_skew()))

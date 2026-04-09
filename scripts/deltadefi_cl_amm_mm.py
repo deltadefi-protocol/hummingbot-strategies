@@ -154,6 +154,11 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
     inventory_hard_spread_mult: Decimal = Field(D("1.80"))
     inventory_hard_disable_accumulation_side: bool = Field(True)
 
+    # FLAIR / LVR monitoring
+    enable_flair_monitor: bool = Field(True)
+    flair_markout_sec: int = Field(30)
+    flair_window_sec: int = Field(1800)
+
     @model_validator(mode="after")
     def apply_pair_presets(self):
         preset = PAIR_PRESETS.get(self.trading_pair, {})
@@ -173,6 +178,10 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
             raise ValueError("toxicity_window_sec must be > 0")
         if self.toxicity_activation_count <= 0:
             raise ValueError("toxicity_activation_count must be > 0")
+        if self.flair_markout_sec <= 0:
+            raise ValueError("flair_markout_sec must be > 0")
+        if self.flair_window_sec <= 0:
+            raise ValueError("flair_window_sec must be > 0")
         for name in (
             "toxicity_buy_ratio_soft",
             "toxicity_buy_ratio_hard",
@@ -838,6 +847,14 @@ class DeltaDefiCLAMM(StrategyV2Base):
         self.balance_gate = BalanceGate(connectors[self.config.exchange], self.config)
         self._recent_fills: deque = deque(maxlen=1000)
         self._toxicity_recent_fills: deque = deque(maxlen=2000)
+        self._flair_pending: deque = deque(maxlen=4000)
+        self._flair_events: deque = deque(maxlen=8000)
+        self._flair_roll_fee: Decimal = ZERO
+        self._flair_roll_lvr: Decimal = ZERO
+        self._flair_roll_net: Decimal = ZERO
+        self._flair_lifetime_fee: Decimal = ZERO
+        self._flair_lifetime_lvr: Decimal = ZERO
+        self._flair_lifetime_net: Decimal = ZERO
         self._last_max_safe: Decimal = ZERO
         self._rebalancing: bool = False
         self._last_rebalance_action: str = ""
@@ -867,6 +884,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
         book_mid = self._get_book_mid()
         if book_mid:
             self._update_anchor_ema(book_mid)
+            self._update_flair_monitor(book_mid)
 
         # Hard recenter: book mid exits bounds
         if book_mid and not self.pool.is_in_range(book_mid):
@@ -1206,6 +1224,109 @@ class DeltaDefiCLAMM(StrategyV2Base):
             "accumulation_side": side,
         }
 
+    @staticmethod
+    def _to_decimal(value) -> Decimal:
+        try:
+            return D(str(value))
+        except Exception:
+            return ZERO
+
+    def _fee_quote_equivalent(self, event: OrderFilledEvent) -> Decimal:
+        fee = getattr(event, "trade_fee", None)
+        if fee is None:
+            return ZERO
+
+        base_token, quote_token = self.config.trading_pair.split("-")
+        fill_price = self._to_decimal(getattr(event, "price", ZERO))
+        fill_amount = self._to_decimal(getattr(event, "amount", ZERO))
+        notional_quote = fill_price * fill_amount
+        total_fee_quote = ZERO
+
+        percent = self._to_decimal(
+            fee.get("percent", ZERO) if isinstance(fee, dict) else getattr(fee, "percent", ZERO)
+        )
+        if percent > ZERO:
+            total_fee_quote += notional_quote * percent
+
+        flat_fees = fee.get("flat_fees", []) if isinstance(fee, dict) else getattr(fee, "flat_fees", [])
+        for flat_fee in flat_fees or []:
+            if isinstance(flat_fee, dict):
+                token = flat_fee.get("token")
+                amount = self._to_decimal(flat_fee.get("amount", ZERO))
+            else:
+                token = getattr(flat_fee, "token", None)
+                amount = self._to_decimal(getattr(flat_fee, "amount", ZERO))
+            if amount <= ZERO:
+                continue
+            if token == quote_token:
+                total_fee_quote += amount
+            elif token == base_token:
+                total_fee_quote += amount * fill_price
+
+        return total_fee_quote
+
+    def _queue_flair_markout(self, event: OrderFilledEvent):
+        if not self.config.enable_flair_monitor:
+            return
+        now_ts = time.time()
+        self._flair_pending.append((
+            now_ts + self.config.flair_markout_sec,
+            event.trade_type,
+            self._to_decimal(event.price),
+            self._to_decimal(event.amount),
+            self._fee_quote_equivalent(event),
+        ))
+
+    def _prune_flair_window(self, now_ts: Optional[float] = None):
+        if now_ts is None:
+            now_ts = time.time()
+        while self._flair_events and now_ts - self._flair_events[0][0] > self.config.flair_window_sec:
+            _, fee_quote, lvr_quote, flair_net = self._flair_events.popleft()
+            self._flair_roll_fee -= fee_quote
+            self._flair_roll_lvr -= lvr_quote
+            self._flair_roll_net -= flair_net
+
+    def _update_flair_monitor(self, book_mid: Decimal):
+        if not self.config.enable_flair_monitor or book_mid is None or book_mid <= ZERO:
+            return
+        now_ts = time.time()
+        while self._flair_pending and self._flair_pending[0][0] <= now_ts:
+            _, side, fill_price, amount, fee_quote = self._flair_pending.popleft()
+            if side == TradeType.BUY:
+                lvr_quote = max(ZERO, amount * (fill_price - book_mid))
+            else:
+                lvr_quote = max(ZERO, amount * (book_mid - fill_price))
+            flair_net = fee_quote - lvr_quote
+
+            self._flair_lifetime_fee += fee_quote
+            self._flair_lifetime_lvr += lvr_quote
+            self._flair_lifetime_net += flair_net
+
+            self._flair_events.append((now_ts, fee_quote, lvr_quote, flair_net))
+            self._flair_roll_fee += fee_quote
+            self._flair_roll_lvr += lvr_quote
+            self._flair_roll_net += flair_net
+
+        self._prune_flair_window(now_ts)
+
+    def _flair_summary(self) -> Dict[str, Decimal]:
+        self._prune_flair_window()
+        eps = D("0.00000001")
+        roll_ratio = self._flair_roll_fee / max(self._flair_roll_lvr, eps) if self._flair_roll_fee > ZERO else ZERO
+        life_ratio = self._flair_lifetime_fee / max(self._flair_lifetime_lvr, eps) if self._flair_lifetime_fee > ZERO else ZERO
+        return {
+            "roll_fee": self._flair_roll_fee,
+            "roll_lvr": self._flair_roll_lvr,
+            "roll_net": self._flair_roll_net,
+            "roll_ratio": roll_ratio,
+            "lifetime_fee": self._flair_lifetime_fee,
+            "lifetime_lvr": self._flair_lifetime_lvr,
+            "lifetime_net": self._flair_lifetime_net,
+            "lifetime_ratio": life_ratio,
+            "pending": D(str(len(self._flair_pending))),
+            "samples": D(str(len(self._flair_events))),
+        }
+
     def _momentum_spread_adjustment(self):
         if not self.config.enable_momentum_spread:
             return ZERO, ZERO
@@ -1403,6 +1524,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
 
         self.pool.update_on_fill(event.trade_type, event.amount)
 
+        self._queue_flair_markout(event)
         self._toxicity_recent_fills.append((time.time(), event.trade_type))
         if self.config.enable_fill_velocity_detector or self.config.enable_momentum_spread:
             self._recent_fills.append((time.time(), event.trade_type))
@@ -1432,6 +1554,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
             book_mid = self._get_book_mid()
             if book_mid:
                 self._update_anchor_ema(book_mid)
+                self._update_flair_monitor(book_mid)
 
             # Range check after fill
             if book_mid and not self.pool.is_in_range(book_mid):
@@ -1617,6 +1740,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
         momentum_bid_extra, momentum_ask_extra = self._momentum_spread_adjustment()
         toxicity = self._get_toxicity_profile()
         inventory = self._inventory_adjustments()
+        flair = self._flair_summary()
         now = time.time()
         m_window = self.config.momentum_window_sec
         m_buys = sum(1 for ts, t in self._recent_fills if t == TradeType.BUY and now - ts <= m_window)
@@ -1661,6 +1785,10 @@ class DeltaDefiCLAMM(StrategyV2Base):
             f"  Toxicity ({self.config.toxicity_window_sec}s, n={int(toxicity['sample_count'])}): "
             f"buy={tox_buy} ({toxicity['buy_ratio']:.2f}) | sell={tox_sell} ({toxicity['sell_ratio']:.2f})",
             f"  Inventory guard: state={inv_state} | accumulation_side={inv_side} | skew={inventory['skew']:+.3f}",
+            f"  FLAIR ({self.config.flair_window_sec}s, n={int(flair['samples'])}, pending={int(flair['pending'])}): "
+            f"fee={flair['roll_fee']:.4f} | LVR={flair['roll_lvr']:.4f} | net={flair['roll_net']:+.4f} | ratio={flair['roll_ratio']:.2f}x",
+            f"  FLAIR lifetime: fee={flair['lifetime_fee']:.4f} | LVR={flair['lifetime_lvr']:.4f} | "
+            f"net={flair['lifetime_net']:+.4f} | ratio={flair['lifetime_ratio']:.2f}x",
             f"  Rebalance: {'enabled' if self.config.enable_rebalance else 'disabled'}"
             f"{' | last: ' + self._last_rebalance_action if self._last_rebalance_action else ''}",
             f"  P&L: {pnl_str} {quote_token} (limit: -{self.config.max_cumulative_loss})",

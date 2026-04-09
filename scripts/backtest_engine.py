@@ -1247,6 +1247,11 @@ def main():
     cl.add_argument("--allow-hard-side-accumulation",
                     dest="inventory_hard_disable_accumulation_side",
                     action="store_false")
+    cl.add_argument("--enable-flair-monitor", action="store_true", default=True)
+    cl.add_argument("--no-flair-monitor", dest="enable_flair_monitor", action="store_false")
+    cl.add_argument("--flair-markout-sec", type=int, default=30)
+    cl.add_argument("--flair-window-sec", type=int, default=1800)
+    cl.add_argument("--flair-fee-bps", type=Decimal, default=D("10"))
 
     # AMM specific
     amm = parser.add_argument_group("AMM options")
