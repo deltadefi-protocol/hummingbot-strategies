@@ -9,7 +9,7 @@
 
 set -e
 
-PYTHON="/Users/yyy/miniforge3/envs/hummingbot/envs/hummingbot/bin/python -u"
+PYTHON="/Users/yuyanyuk/miniforge3/envs/hummingbot/bin/python -u"
 SYMBOL=ADAUSDC
 WORKERS=8
 

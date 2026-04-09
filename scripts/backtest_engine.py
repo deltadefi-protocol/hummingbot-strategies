@@ -688,6 +688,248 @@ class PerformanceTracker:
 
 
 # ---------------------------------------------------------------------------
+# TrendValidator — evaluates indicator prediction quality
+# ---------------------------------------------------------------------------
+
+
+class TrendValidator:
+    """Collects per-candle indicator readings and validates them against
+    realised forward returns at multiple horizons.
+
+    After the backtest loop, call ``compute()`` to produce accuracy and
+    correlation metrics.
+    """
+
+    # Forward-return horizons (in candles — 1-minute data)
+    HORIZONS = {"15m": 15, "1h": 60, "4h": 240}
+
+    def __init__(self):
+        # Parallel lists — one entry per candle
+        self._closes: List[float] = []
+        self._effective_trend: List[float] = []
+        self._adx: List[float] = []
+        self._hurst: List[float] = []
+        self._natr: List[float] = []
+        self._hmm_regime: List[str] = []  # "ranging", "trending", "volatile", "n/a"
+        self._timestamps: List[float] = []
+
+    # -- recording --
+
+    def record(self, timestamp: float, close: float, strategy_data: dict):
+        self._timestamps.append(timestamp)
+        self._closes.append(close)
+        self._effective_trend.append(
+            float(strategy_data.get("effective_trend", 0)))
+        self._adx.append(float(strategy_data.get("adx", 0)))
+        self._hurst.append(float(strategy_data.get("hurst", 0)))
+        self._natr.append(float(strategy_data.get("natr", 0)))
+
+        hmm_raw = strategy_data.get("hmm_regime", "n/a")
+        # hmm_regime format: "ranging(85%)" — extract label
+        regime = hmm_raw.split("(")[0] if "(" in str(hmm_raw) else str(hmm_raw)
+        self._hmm_regime.append(regime)
+
+    # -- analysis --
+
+    def compute(self) -> dict:
+        """Compute validation metrics. Returns a dict suitable for printing
+        and/or merging into the main metrics dict."""
+        n = len(self._closes)
+        if n < 100:
+            return {}
+
+        results: dict = {}
+
+        for label, horizon in self.HORIZONS.items():
+            if n <= horizon:
+                continue
+
+            # Forward absolute return (%) for each candle
+            fwd_abs = []  # |r|
+            fwd_dir = []  # sign of return: +1 / -1
+            for i in range(n - horizon):
+                r = (self._closes[i + horizon] - self._closes[i]) / self._closes[i]
+                fwd_abs.append(abs(r) * 100)
+                fwd_dir.append(1.0 if r >= 0 else -1.0)
+
+            m = len(fwd_abs)
+
+            # 1. effective_trend vs forward |return| — Pearson correlation
+            et = self._effective_trend[:m]
+            corr_et = self._pearson(et, fwd_abs)
+            results[f"corr_eff_trend_vs_fwd_abs_{label}"] = round(corr_et, 4)
+
+            # 2. ADX vs forward |return| correlation
+            corr_adx = self._pearson(self._adx[:m], fwd_abs)
+            results[f"corr_adx_vs_fwd_abs_{label}"] = round(corr_adx, 4)
+
+            # 3. Hurst accuracy — when hurst > 0.5 (trending), is forward
+            #    |return| higher than when hurst < 0.5 (mean-reverting)?
+            hurst_trending_abs = [
+                fwd_abs[i] for i in range(m) if self._hurst[i] > 0.5]
+            hurst_reverting_abs = [
+                fwd_abs[i] for i in range(m) if 0 < self._hurst[i] <= 0.5]
+            if hurst_trending_abs and hurst_reverting_abs:
+                avg_t = sum(hurst_trending_abs) / len(hurst_trending_abs)
+                avg_r = sum(hurst_reverting_abs) / len(hurst_reverting_abs)
+                results[f"hurst_trend_avg_fwd_abs_{label}"] = round(avg_t, 4)
+                results[f"hurst_revert_avg_fwd_abs_{label}"] = round(avg_r, 4)
+                results[f"hurst_ratio_{label}"] = (
+                    round(avg_t / avg_r, 3) if avg_r > 0 else 0)
+
+            # 4. HMM regime accuracy — avg forward |return| per regime
+            regime_buckets: Dict[str, List[float]] = {}
+            for i in range(m):
+                reg = self._hmm_regime[i]
+                if reg == "n/a":
+                    continue
+                regime_buckets.setdefault(reg, []).append(fwd_abs[i])
+            for reg, vals in sorted(regime_buckets.items()):
+                avg = sum(vals) / len(vals) if vals else 0
+                results[f"hmm_{reg}_avg_fwd_abs_{label}"] = round(avg, 4)
+                results[f"hmm_{reg}_count_{label}"] = len(vals)
+
+            # 5. effective_trend buckets — low/mid/high
+            buckets = {"low": [], "mid": [], "high": []}
+            for i in range(m):
+                v = et[i]
+                if v < 0.3:
+                    buckets["low"].append(fwd_abs[i])
+                elif v < 0.7:
+                    buckets["mid"].append(fwd_abs[i])
+                else:
+                    buckets["high"].append(fwd_abs[i])
+            for bk, vals in buckets.items():
+                avg = sum(vals) / len(vals) if vals else 0
+                results[f"eff_trend_{bk}_avg_fwd_abs_{label}"] = round(avg, 4)
+                results[f"eff_trend_{bk}_count_{label}"] = len(vals)
+
+            # 6. NATR vs realised volatility (forward std of returns)
+            if m > 1:
+                fwd_std = []
+                for i in range(min(m, n - horizon)):
+                    chunk = self._closes[i:i + horizon]
+                    if len(chunk) < 2:
+                        continue
+                    rets = [(chunk[j] - chunk[j - 1]) / chunk[j - 1]
+                            for j in range(1, len(chunk))]
+                    mu = sum(rets) / len(rets)
+                    var = sum((r - mu) ** 2 for r in rets) / len(rets)
+                    fwd_std.append(math.sqrt(var))
+                if fwd_std:
+                    corr_natr = self._pearson(
+                        self._natr[:len(fwd_std)], fwd_std)
+                    results[f"corr_natr_vs_fwd_vol_{label}"] = round(
+                        corr_natr, 4)
+
+        return results
+
+    def print_summary(self, metrics: dict):
+        if not metrics:
+            print("\nInsufficient data for indicator validation.")
+            return
+
+        print("\n" + "=" * 70)
+        print("  INDICATOR VALIDATION")
+        print("=" * 70)
+
+        for label in self.HORIZONS:
+            # Correlations
+            keys_for_horizon = [k for k in metrics if k.endswith(f"_{label}")]
+            if not keys_for_horizon:
+                continue
+            print(f"\n  --- Forward horizon: {label} ---")
+
+            corr_et = metrics.get(f"corr_eff_trend_vs_fwd_abs_{label}")
+            corr_adx = metrics.get(f"corr_adx_vs_fwd_abs_{label}")
+            corr_natr = metrics.get(f"corr_natr_vs_fwd_vol_{label}")
+            if corr_et is not None:
+                print(f"  effective_trend ↔ |fwd return|:  r={corr_et:+.4f}")
+            if corr_adx is not None:
+                print(f"  ADX ↔ |fwd return|:              r={corr_adx:+.4f}")
+            if corr_natr is not None:
+                print(f"  NATR ↔ fwd volatility:           r={corr_natr:+.4f}")
+
+            # Hurst ratio
+            ratio = metrics.get(f"hurst_ratio_{label}")
+            if ratio is not None:
+                ht = metrics.get(f"hurst_trend_avg_fwd_abs_{label}", 0)
+                hr = metrics.get(f"hurst_revert_avg_fwd_abs_{label}", 0)
+                print(f"  Hurst trending avg |fwd|:        {ht:.4f}%")
+                print(f"  Hurst reverting avg |fwd|:       {hr:.4f}%")
+                print(f"  Hurst ratio (trend/revert):      {ratio:.3f}x")
+
+            # effective_trend buckets
+            for bk in ("low", "mid", "high"):
+                avg = metrics.get(f"eff_trend_{bk}_avg_fwd_abs_{label}")
+                cnt = metrics.get(f"eff_trend_{bk}_count_{label}", 0)
+                if avg is not None:
+                    print(f"  eff_trend {bk:4s}  avg|fwd|={avg:.4f}%  "
+                          f"n={cnt}")
+
+            # HMM regimes
+            hmm_keys = sorted(
+                k for k in keys_for_horizon
+                if k.startswith("hmm_") and "_avg_" in k)
+            for k in hmm_keys:
+                reg = k.replace("hmm_", "").replace(
+                    f"_avg_fwd_abs_{label}", "")
+                avg = metrics[k]
+                cnt = metrics.get(f"hmm_{reg}_count_{label}", 0)
+                print(f"  HMM {reg:10s}  avg|fwd|={avg:.4f}%  n={cnt}")
+
+        print("=" * 70)
+
+    def save_csv(self, path: str):
+        """Save per-candle indicator + forward return data for external analysis."""
+        n = len(self._closes)
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f)
+            header = ["timestamp", "close", "effective_trend", "adx",
+                      "hurst", "natr", "hmm_regime"]
+            for label, h in self.HORIZONS.items():
+                header.append(f"fwd_return_{label}")
+                header.append(f"fwd_abs_return_{label}")
+            writer.writerow(header)
+
+            for i in range(n):
+                row = [
+                    self._timestamps[i], self._closes[i],
+                    self._effective_trend[i], self._adx[i],
+                    self._hurst[i], self._natr[i], self._hmm_regime[i],
+                ]
+                for label, h in self.HORIZONS.items():
+                    if i + h < n:
+                        r = ((self._closes[i + h] - self._closes[i])
+                             / self._closes[i] * 100)
+                        row.append(round(r, 6))
+                        row.append(round(abs(r), 6))
+                    else:
+                        row.extend(["", ""])
+                writer.writerow(row)
+
+        print(f"Indicator validation data saved to {path}")
+
+    # -- helpers --
+
+    @staticmethod
+    def _pearson(x: List[float], y: List[float]) -> float:
+        n = min(len(x), len(y))
+        if n < 2:
+            return 0.0
+        mx = sum(x[:n]) / n
+        my = sum(y[:n]) / n
+        cov = sum((x[i] - mx) * (y[i] - my) for i in range(n))
+        sx = math.sqrt(sum((x[i] - mx) ** 2 for i in range(n)))
+        sy = math.sqrt(sum((y[i] - my) ** 2 for i in range(n)))
+        if sx == 0 or sy == 0:
+            return 0.0
+        return cov / (sx * sy)
+
+
+# ---------------------------------------------------------------------------
 # BacktestEngine
 # ---------------------------------------------------------------------------
 
@@ -699,7 +941,8 @@ class BacktestEngine:
     def __init__(self, strategy: BacktestStrategy, candles: List[Candle],
                  base_balance: Decimal, quote_balance: Decimal,
                  output_dir: str = "results", charts: bool = True,
-                 quiet: bool = False, lightweight: bool = False):
+                 quiet: bool = False, lightweight: bool = False,
+                 validate_indicators: bool = False):
         self.strategy = strategy
         self.candles = candles
         self.base_balance = base_balance
@@ -709,6 +952,7 @@ class BacktestEngine:
         self.quiet = quiet
         self.tracker = LightweightTracker() if lightweight else PerformanceTracker()
         self.active_orders: List[SimOrder] = []
+        self.validator = TrendValidator() if validate_indicators else None
 
     def run(self) -> dict:
         """Run backtest. Returns metrics dict."""
@@ -765,6 +1009,11 @@ class BacktestEngine:
                 )
                 self.tracker.record(snapshot)
 
+                # Record indicator values for validation
+                if self.validator is not None:
+                    self.validator.record(
+                        sim_time, float(candle.close), snap_data)
+
                 # Early stop: portfolio wiped out
                 if pv <= ZERO:
                     if not self.quiet:
@@ -794,6 +1043,21 @@ class BacktestEngine:
 
             if self.charts:
                 self._plot_charts()
+
+        # Indicator validation
+        if self.validator is not None:
+            val_metrics = self.validator.compute()
+            if val_metrics:
+                metrics.update(val_metrics)
+                if not self.quiet:
+                    self.validator.print_summary(val_metrics)
+                    start_date = self._ts_to_date(self.candles[0].open_time)
+                    end_date = self._ts_to_date(self.candles[-1].open_time)
+                    val_csv = os.path.join(
+                        self.output_dir,
+                        f"indicator_validation_{self.strategy.name}"
+                        f"_{start_date}_{end_date}.csv")
+                    self.validator.save_csv(val_csv)
 
         return metrics
 
@@ -913,6 +1177,8 @@ def main():
                         help="Output directory (default: results)")
     parser.add_argument("--no-charts", action="store_true",
                         help="Skip matplotlib chart generation")
+    parser.add_argument("--validate-indicators", action="store_true",
+                        help="Evaluate indicator prediction accuracy")
 
     # Shared strategy params
     parser.add_argument("--spread-bps", type=Decimal, default=D("40"),
@@ -998,6 +1264,7 @@ def main():
         quote_balance=args.quote_balance,
         output_dir=args.output,
         charts=not args.no_charts,
+        validate_indicators=args.validate_indicators,
     )
     engine.run()
 
