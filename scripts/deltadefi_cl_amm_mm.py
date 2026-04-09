@@ -133,6 +133,27 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
     momentum_window_sec: int = Field(300)
     momentum_spread_bps: Decimal = Field(D("10"))
 
+    # Fill-toxicity guard (widen + shrink on toxic side)
+    toxicity_window_sec: int = Field(300)
+    toxicity_activation_count: int = Field(8)
+    toxicity_buy_ratio_soft: Decimal = Field(D("0.65"))
+    toxicity_buy_ratio_hard: Decimal = Field(D("0.80"))
+    toxicity_sell_ratio_soft: Decimal = Field(D("0.65"))
+    toxicity_sell_ratio_hard: Decimal = Field(D("0.80"))
+    toxicity_soft_spread_mult: Decimal = Field(D("1.30"))
+    toxicity_hard_spread_mult: Decimal = Field(D("1.80"))
+    toxicity_soft_size_mult: Decimal = Field(D("0.70"))
+    toxicity_hard_size_mult: Decimal = Field(D("0.40"))
+
+    # Inventory risk controls
+    inventory_skew_soft_limit: Decimal = Field(D("0.60"))
+    inventory_skew_hard_limit: Decimal = Field(D("0.80"))
+    inventory_soft_size_mult: Decimal = Field(D("0.60"))
+    inventory_hard_size_mult: Decimal = Field(D("0.20"))
+    inventory_soft_spread_mult: Decimal = Field(D("1.30"))
+    inventory_hard_spread_mult: Decimal = Field(D("1.80"))
+    inventory_hard_disable_accumulation_side: bool = Field(True)
+
     @model_validator(mode="after")
     def apply_pair_presets(self):
         preset = PAIR_PRESETS.get(self.trading_pair, {})
@@ -148,6 +169,40 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
             raise ValueError("base_concentration_pct must be > 0")
         if self.min_concentration_pct >= self.max_concentration_pct:
             raise ValueError("min_concentration_pct must be < max_concentration_pct")
+        if self.toxicity_window_sec <= 0:
+            raise ValueError("toxicity_window_sec must be > 0")
+        if self.toxicity_activation_count <= 0:
+            raise ValueError("toxicity_activation_count must be > 0")
+        for name in (
+            "toxicity_buy_ratio_soft",
+            "toxicity_buy_ratio_hard",
+            "toxicity_sell_ratio_soft",
+            "toxicity_sell_ratio_hard",
+        ):
+            value = getattr(self, name)
+            if not (ZERO < value < D(1)):
+                raise ValueError(f"{name} must be in (0, 1)")
+        for name in (
+            "toxicity_soft_spread_mult",
+            "toxicity_hard_spread_mult",
+            "inventory_soft_spread_mult",
+            "inventory_hard_spread_mult",
+        ):
+            if getattr(self, name) < D(1):
+                raise ValueError(f"{name} must be >= 1")
+        for name in (
+            "toxicity_soft_size_mult",
+            "toxicity_hard_size_mult",
+            "inventory_soft_size_mult",
+            "inventory_hard_size_mult",
+            "inventory_skew_soft_limit",
+            "inventory_skew_hard_limit",
+        ):
+            value = getattr(self, name)
+            if not (ZERO < value <= D(1)):
+                raise ValueError(f"{name} must be in (0, 1]")
+        if self.inventory_skew_soft_limit >= self.inventory_skew_hard_limit:
+            raise ValueError("inventory_skew_soft_limit must be < inventory_skew_hard_limit")
         return self
 
 
@@ -782,6 +837,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
 
         self.balance_gate = BalanceGate(connectors[self.config.exchange], self.config)
         self._recent_fills: deque = deque(maxlen=1000)
+        self._toxicity_recent_fills: deque = deque(maxlen=2000)
         self._last_max_safe: Decimal = ZERO
         self._rebalancing: bool = False
         self._last_rebalance_action: str = ""
@@ -983,6 +1039,9 @@ class DeltaDefiCLAMM(StrategyV2Base):
         connector = self.connectors[self.config.exchange]
         pair = self.config.trading_pair
 
+        toxicity = self._get_toxicity_profile()
+        inventory = self._inventory_adjustments()
+
         momentum_bid_extra, momentum_ask_extra = self._momentum_spread_adjustment()
 
         for i in range(self.config.num_levels):
@@ -995,6 +1054,26 @@ class DeltaDefiCLAMM(StrategyV2Base):
             else:
                 bid_spread, ask_spread = base_spread, base_spread
 
+            if toxicity["buy_state"] >= D(2):
+                bid_spread *= self.config.toxicity_hard_spread_mult
+            elif toxicity["buy_state"] >= D(1):
+                bid_spread *= self.config.toxicity_soft_spread_mult
+            if toxicity["sell_state"] >= D(2):
+                ask_spread *= self.config.toxicity_hard_spread_mult
+            elif toxicity["sell_state"] >= D(1):
+                ask_spread *= self.config.toxicity_soft_spread_mult
+
+            if inventory["state"] >= D(2):
+                if inventory["accumulation_side"] == "buy":
+                    bid_spread *= self.config.inventory_hard_spread_mult
+                elif inventory["accumulation_side"] == "sell":
+                    ask_spread *= self.config.inventory_hard_spread_mult
+            elif inventory["state"] >= D(1):
+                if inventory["accumulation_side"] == "buy":
+                    bid_spread *= self.config.inventory_soft_spread_mult
+                elif inventory["accumulation_side"] == "sell":
+                    ask_spread *= self.config.inventory_soft_spread_mult
+
             bid_spread += momentum_bid_extra
             ask_spread += momentum_ask_extra
 
@@ -1003,6 +1082,32 @@ class DeltaDefiCLAMM(StrategyV2Base):
 
             ask_size = layer_value / ask_price if ask_price > ZERO else ZERO
             bid_size = layer_value / bid_price if bid_price > ZERO else ZERO
+
+            if toxicity["buy_state"] >= D(2):
+                bid_size *= self.config.toxicity_hard_size_mult
+            elif toxicity["buy_state"] >= D(1):
+                bid_size *= self.config.toxicity_soft_size_mult
+            if toxicity["sell_state"] >= D(2):
+                ask_size *= self.config.toxicity_hard_size_mult
+            elif toxicity["sell_state"] >= D(1):
+                ask_size *= self.config.toxicity_soft_size_mult
+
+            if inventory["state"] >= D(2):
+                if inventory["accumulation_side"] == "buy":
+                    if self.config.inventory_hard_disable_accumulation_side:
+                        bid_size = ZERO
+                    else:
+                        bid_size *= self.config.inventory_hard_size_mult
+                elif inventory["accumulation_side"] == "sell":
+                    if self.config.inventory_hard_disable_accumulation_side:
+                        ask_size = ZERO
+                    else:
+                        ask_size *= self.config.inventory_hard_size_mult
+            elif inventory["state"] >= D(1):
+                if inventory["accumulation_side"] == "buy":
+                    bid_size *= self.config.inventory_soft_size_mult
+                elif inventory["accumulation_side"] == "sell":
+                    ask_size *= self.config.inventory_soft_size_mult
 
             if self.config.enable_order_randomization:
                 ask_size = self._randomize(ask_size)
@@ -1027,6 +1132,79 @@ class DeltaDefiCLAMM(StrategyV2Base):
         bid_spread = max(base_spread * (D(1) + skew * sens), floor)
         ask_spread = max(base_spread * (D(1) - skew * sens), floor)
         return bid_spread, ask_spread
+
+    def _get_toxicity_profile(self) -> Dict[str, Decimal]:
+        now = time.time()
+        window = self.config.toxicity_window_sec
+        while self._toxicity_recent_fills and now - self._toxicity_recent_fills[0][0] > window:
+            self._toxicity_recent_fills.popleft()
+
+        buy_count = sum(1 for _, t in self._toxicity_recent_fills if t == TradeType.BUY)
+        sell_count = sum(1 for _, t in self._toxicity_recent_fills if t == TradeType.SELL)
+        total = buy_count + sell_count
+        if total <= 0:
+            return {
+                "buy_ratio": ZERO,
+                "sell_ratio": ZERO,
+                "sample_count": ZERO,
+                "buy_toxicity": ZERO,
+                "sell_toxicity": ZERO,
+                "buy_state": D(0),
+                "sell_state": D(0),
+            }
+
+        buy_ratio = D(str(buy_count / total))
+        sell_ratio = D(str(sell_count / total))
+        sample_count = D(str(total))
+        min_count = self.config.toxicity_activation_count
+
+        buy_state = D(0)
+        if total >= min_count:
+            if buy_ratio >= self.config.toxicity_buy_ratio_hard:
+                buy_state = D(2)
+            elif buy_ratio >= self.config.toxicity_buy_ratio_soft:
+                buy_state = D(1)
+
+        sell_state = D(0)
+        if total >= min_count:
+            if sell_ratio >= self.config.toxicity_sell_ratio_hard:
+                sell_state = D(2)
+            elif sell_ratio >= self.config.toxicity_sell_ratio_soft:
+                sell_state = D(1)
+
+        return {
+            "buy_ratio": buy_ratio,
+            "sell_ratio": sell_ratio,
+            "sample_count": sample_count,
+            "buy_toxicity": buy_state,
+            "sell_toxicity": sell_state,
+            "buy_state": buy_state,
+            "sell_state": sell_state,
+        }
+
+    def _inventory_adjustments(self) -> Dict[str, object]:
+        skew = D(str(self.pool.get_inventory_skew()))
+        abs_skew = abs(skew)
+        soft = self.config.inventory_skew_soft_limit
+        hard = self.config.inventory_skew_hard_limit
+
+        state = D(0)
+        if abs_skew >= hard:
+            state = D(2)
+        elif abs_skew >= soft:
+            state = D(1)
+
+        side = None
+        if skew > ZERO:
+            side = "sell"
+        elif skew < ZERO:
+            side = "buy"
+
+        return {
+            "skew": skew,
+            "state": state,
+            "accumulation_side": side,
+        }
 
     def _momentum_spread_adjustment(self):
         if not self.config.enable_momentum_spread:
@@ -1104,6 +1282,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
             max_window = max(max_window, self.config.fill_velocity_window_sec)
         if self.config.enable_momentum_spread:
             max_window = max(max_window, self.config.momentum_window_sec)
+        max_window = max(max_window, self.config.toxicity_window_sec)
         if max_window > 0:
             while self._recent_fills and now - self._recent_fills[0][0] > max_window:
                 self._recent_fills.popleft()
@@ -1224,6 +1403,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
 
         self.pool.update_on_fill(event.trade_type, event.amount)
 
+        self._toxicity_recent_fills.append((time.time(), event.trade_type))
         if self.config.enable_fill_velocity_detector or self.config.enable_momentum_spread:
             self._recent_fills.append((time.time(), event.trade_type))
 
@@ -1435,6 +1615,8 @@ class DeltaDefiCLAMM(StrategyV2Base):
         candle_count = candle_builder.candle_count if candle_builder else 0
 
         momentum_bid_extra, momentum_ask_extra = self._momentum_spread_adjustment()
+        toxicity = self._get_toxicity_profile()
+        inventory = self._inventory_adjustments()
         now = time.time()
         m_window = self.config.momentum_window_sec
         m_buys = sum(1 for ts, t in self._recent_fills if t == TradeType.BUY and now - ts <= m_window)
@@ -1446,6 +1628,18 @@ class DeltaDefiCLAMM(StrategyV2Base):
             momentum_str = f"+{abs(m_net)} buys -> BID +{momentum_bid_extra * D('10000'):.0f}bps"
         else:
             momentum_str = "neutral"
+
+        def _toxicity_label(state: Decimal) -> str:
+            if state >= D(2):
+                return "hard"
+            if state >= D(1):
+                return "soft"
+            return "off"
+
+        tox_buy = _toxicity_label(toxicity["buy_state"])
+        tox_sell = _toxicity_label(toxicity["sell_state"])
+        inv_state = _toxicity_label(inventory["state"])
+        inv_side = inventory["accumulation_side"] or "none"
 
         lines = [
             f"  [CL-AMM {self.config.trading_pair}] Mid: {blended_mid:.6f} (w={w})",
@@ -1464,6 +1658,9 @@ class DeltaDefiCLAMM(StrategyV2Base):
             f"    NATR: {natr_str} | ADX: {adx_str} | Hurst: {hurst_str} | HMM: {hmm_str}",
             self._format_pipeline_status(),
             f"  Momentum ({m_window}s): {momentum_str}",
+            f"  Toxicity ({self.config.toxicity_window_sec}s, n={int(toxicity['sample_count'])}): "
+            f"buy={tox_buy} ({toxicity['buy_ratio']:.2f}) | sell={tox_sell} ({toxicity['sell_ratio']:.2f})",
+            f"  Inventory guard: state={inv_state} | accumulation_side={inv_side} | skew={inventory['skew']:+.3f}",
             f"  Rebalance: {'enabled' if self.config.enable_rebalance else 'disabled'}"
             f"{' | last: ' + self._last_rebalance_action if self._last_rebalance_action else ''}",
             f"  P&L: {pnl_str} {quote_token} (limit: -{self.config.max_cumulative_loss})",

@@ -11,6 +11,7 @@ Usage:
 import math
 import os
 import sys
+from collections import deque
 from decimal import Decimal
 from enum import Enum
 from types import ModuleType, SimpleNamespace
@@ -171,6 +172,42 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         self.soft_recenter_drift_pct = D(str(
             config.get("soft_recenter_drift_pct", "2.0")))
 
+        # Fill-toxicity guard (widen + shrink on toxic side)
+        self.toxicity_window_sec = int(config.get("toxicity_window_sec", 300))
+        self.toxicity_activation_count = int(config.get("toxicity_activation_count", 8))
+        self.toxicity_buy_ratio_soft = D(str(config.get("toxicity_buy_ratio_soft", "0.65")))
+        self.toxicity_buy_ratio_hard = D(str(config.get("toxicity_buy_ratio_hard", "0.80")))
+        self.toxicity_sell_ratio_soft = D(str(config.get("toxicity_sell_ratio_soft", "0.65")))
+        self.toxicity_sell_ratio_hard = D(str(config.get("toxicity_sell_ratio_hard", "0.80")))
+        self.toxicity_soft_spread_mult = D(str(config.get("toxicity_soft_spread_mult", "1.30")))
+        self.toxicity_hard_spread_mult = D(str(config.get("toxicity_hard_spread_mult", "1.80")))
+        self.toxicity_soft_size_mult = D(str(config.get("toxicity_soft_size_mult", "0.70")))
+        self.toxicity_hard_size_mult = D(str(config.get("toxicity_hard_size_mult", "0.40")))
+
+        # Inventory risk controls
+        self.inventory_skew_soft_limit = D(str(config.get("inventory_skew_soft_limit", "0.60")))
+        self.inventory_skew_hard_limit = D(str(config.get("inventory_skew_hard_limit", "0.80")))
+        self.inventory_soft_size_mult = D(str(config.get("inventory_soft_size_mult", "0.60")))
+        self.inventory_hard_size_mult = D(str(config.get("inventory_hard_size_mult", "0.20")))
+        self.inventory_soft_spread_mult = D(str(config.get("inventory_soft_spread_mult", "1.30")))
+        self.inventory_hard_spread_mult = D(str(config.get("inventory_hard_spread_mult", "1.80")))
+        self.inventory_hard_disable_accumulation_side = bool(
+            config.get("inventory_hard_disable_accumulation_side", True))
+        if self.toxicity_window_sec <= 0:
+            raise ValueError("toxicity_window_sec must be > 0")
+        if self.toxicity_activation_count <= 0:
+            raise ValueError("toxicity_activation_count must be > 0")
+        if not (ZERO < self.toxicity_buy_ratio_soft < D(1)):
+            raise ValueError("toxicity_buy_ratio_soft must be in (0, 1)")
+        if not (ZERO < self.toxicity_buy_ratio_hard < D(1)):
+            raise ValueError("toxicity_buy_ratio_hard must be in (0, 1)")
+        if not (ZERO < self.toxicity_sell_ratio_soft < D(1)):
+            raise ValueError("toxicity_sell_ratio_soft must be in (0, 1)")
+        if not (ZERO < self.toxicity_sell_ratio_hard < D(1)):
+            raise ValueError("toxicity_sell_ratio_hard must be in (0, 1)")
+        if self.inventory_skew_soft_limit >= self.inventory_skew_hard_limit:
+            raise ValueError("inventory_skew_soft_limit must be < inventory_skew_hard_limit")
+
         # Concentration
         self.base_concentration_pct = D(str(config.get("concentration", "5")))
         self.min_concentration_pct = D(str(
@@ -224,6 +261,8 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         self._trend_halted_this_candle = False
         self._trend_order_scale = 1.0
         self._trend_halted_count = 0
+        self._toxicity_recent_fills: deque = deque(maxlen=2000)
+        self._current_sim_time: float = 0.0
 
     def initialize(self, initial_price: Decimal, base_balance: Decimal,
                    quote_balance: Decimal):
@@ -261,6 +300,7 @@ class CLAMMBacktestStrategy(BacktestStrategy):
 
     def on_candle(self, candle: Candle, history: List[Candle],
                   sim_time: float) -> List[SimOrder]:
+        self._current_sim_time = sim_time
         self._recentered_this_candle = False
         self._range_changed_this_candle = False
         self._trend_halted_this_candle = False
@@ -301,6 +341,7 @@ class CLAMMBacktestStrategy(BacktestStrategy):
 
     def on_fill(self, side: str, price: Decimal, amount: Decimal,
                 sim_time: float):
+        self._toxicity_recent_fills.append((sim_time, TradeType.SELL if side == "sell" else TradeType.BUY))
         trade_type = TradeType.SELL if side == "sell" else TradeType.BUY
         self.pool.update_on_fill(trade_type, amount)
 
@@ -342,6 +383,9 @@ class CLAMMBacktestStrategy(BacktestStrategy):
             "trend_order_scale": self._trend_order_scale,
             "trend_halted": self._trend_halted_this_candle,
             "total_trend_halts": self._trend_halted_count,
+            "toxicity_samples": float(self._get_toxicity_profile()["sample_count"]),
+            "toxicity_buy_ratio": float(self._get_toxicity_profile()["buy_ratio"]),
+            "toxicity_sell_ratio": float(self._get_toxicity_profile()["sell_ratio"]),
         }
 
     def get_portfolio_value(self, price: Decimal) -> Decimal:
@@ -414,6 +458,8 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         max_safe_base = self._max_safe_order_base()
         order_base = max_safe_base * self.order_safe_ratio * D(str(round(trend_scale, 6)))
         order_value = order_base * mid_price
+        toxicity = self._get_toxicity_profile()
+        inventory = self._inventory_adjustments()
 
         weights = [self.size_decay ** i for i in range(self.num_levels)]
         total_weight = sum(weights)
@@ -431,11 +477,57 @@ class CLAMMBacktestStrategy(BacktestStrategy):
             else:
                 bid_spread, ask_spread = base_spread, base_spread
 
+            if toxicity["buy_state"] >= D(2):
+                bid_spread *= self.toxicity_hard_spread_mult
+            elif toxicity["buy_state"] >= D(1):
+                bid_spread *= self.toxicity_soft_spread_mult
+            if toxicity["sell_state"] >= D(2):
+                ask_spread *= self.toxicity_hard_spread_mult
+            elif toxicity["sell_state"] >= D(1):
+                ask_spread *= self.toxicity_soft_spread_mult
+
+            if inventory["state"] >= D(2):
+                if inventory["accumulation_side"] == "buy":
+                    bid_spread *= self.inventory_hard_spread_mult
+                elif inventory["accumulation_side"] == "sell":
+                    ask_spread *= self.inventory_hard_spread_mult
+            elif inventory["state"] >= D(1):
+                if inventory["accumulation_side"] == "buy":
+                    bid_spread *= self.inventory_soft_spread_mult
+                elif inventory["accumulation_side"] == "sell":
+                    ask_spread *= self.inventory_soft_spread_mult
+
             ask_price = mid_price * (D(1) + ask_spread)
             bid_price = mid_price * (D(1) - bid_spread)
 
             ask_size = layer_value / ask_price if ask_price > ZERO else ZERO
             bid_size = layer_value / bid_price if bid_price > ZERO else ZERO
+
+            if toxicity["buy_state"] >= D(2):
+                bid_size *= self.toxicity_hard_size_mult
+            elif toxicity["buy_state"] >= D(1):
+                bid_size *= self.toxicity_soft_size_mult
+            if toxicity["sell_state"] >= D(2):
+                ask_size *= self.toxicity_hard_size_mult
+            elif toxicity["sell_state"] >= D(1):
+                ask_size *= self.toxicity_soft_size_mult
+
+            if inventory["state"] >= D(2):
+                if inventory["accumulation_side"] == "buy":
+                    if self.inventory_hard_disable_accumulation_side:
+                        bid_size = ZERO
+                    else:
+                        bid_size *= self.inventory_hard_size_mult
+                elif inventory["accumulation_side"] == "sell":
+                    if self.inventory_hard_disable_accumulation_side:
+                        ask_size = ZERO
+                    else:
+                        ask_size *= self.inventory_hard_size_mult
+            elif inventory["state"] >= D(1):
+                if inventory["accumulation_side"] == "buy":
+                    bid_size *= self.inventory_soft_size_mult
+                elif inventory["accumulation_side"] == "sell":
+                    ask_size *= self.inventory_soft_size_mult
 
             # Cap by available balance
             if ask_size > self.base_balance:
@@ -455,6 +547,64 @@ class CLAMMBacktestStrategy(BacktestStrategy):
                 orders.append(SimOrder("buy", bid_price, bid_size))
 
         return orders
+
+    def _get_toxicity_profile(self) -> Dict[str, Decimal]:
+        now = self._current_sim_time
+        window = self.toxicity_window_sec
+        while self._toxicity_recent_fills and now - self._toxicity_recent_fills[0][0] > window:
+            self._toxicity_recent_fills.popleft()
+
+        buy_count = sum(1 for _, t in self._toxicity_recent_fills if t == TradeType.BUY)
+        sell_count = sum(1 for _, t in self._toxicity_recent_fills if t == TradeType.SELL)
+        total = buy_count + sell_count
+        if total <= 0:
+            return {
+                "buy_ratio": ZERO,
+                "sell_ratio": ZERO,
+                "sample_count": ZERO,
+                "buy_state": D(0),
+                "sell_state": D(0),
+            }
+
+        buy_ratio = D(str(buy_count / total))
+        sell_ratio = D(str(sell_count / total))
+
+        buy_state = D(0)
+        if total >= self.toxicity_activation_count:
+            if buy_ratio >= self.toxicity_buy_ratio_hard:
+                buy_state = D(2)
+            elif buy_ratio >= self.toxicity_buy_ratio_soft:
+                buy_state = D(1)
+
+        sell_state = D(0)
+        if total >= self.toxicity_activation_count:
+            if sell_ratio >= self.toxicity_sell_ratio_hard:
+                sell_state = D(2)
+            elif sell_ratio >= self.toxicity_sell_ratio_soft:
+                sell_state = D(1)
+
+        return {
+            "buy_ratio": buy_ratio,
+            "sell_ratio": sell_ratio,
+            "sample_count": D(str(total)),
+            "buy_state": buy_state,
+            "sell_state": sell_state,
+        }
+
+    def _inventory_adjustments(self) -> Dict[str, object]:
+        skew = D(str(self.pool.get_inventory_skew()))
+        abs_skew = abs(skew)
+        state = D(0)
+        if abs_skew >= self.inventory_skew_hard_limit:
+            state = D(2)
+        elif abs_skew >= self.inventory_skew_soft_limit:
+            state = D(1)
+        side = None
+        if skew > ZERO:
+            side = "sell"
+        elif skew < ZERO:
+            side = "buy"
+        return {"skew": skew, "state": state, "accumulation_side": side}
 
     def _asymmetric_spreads(self, base_spread: Decimal):
         skew = D(str(self.pool.get_inventory_skew()))

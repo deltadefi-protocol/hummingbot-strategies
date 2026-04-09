@@ -1226,6 +1226,27 @@ def main():
     cl.add_argument("--soft-recenter-drift-pct", type=Decimal, default=D("2.0"))
     cl.add_argument("--trend-order-scale-factor", type=Decimal, default=D("0.0"))
     cl.add_argument("--trend-halt-threshold", type=Decimal, default=D("0.0"))
+    cl.add_argument("--toxicity-window-sec", type=int, default=300)
+    cl.add_argument("--toxicity-activation-count", type=int, default=8)
+    cl.add_argument("--toxicity-buy-ratio-soft", type=Decimal, default=D("0.65"))
+    cl.add_argument("--toxicity-buy-ratio-hard", type=Decimal, default=D("0.80"))
+    cl.add_argument("--toxicity-sell-ratio-soft", type=Decimal, default=D("0.65"))
+    cl.add_argument("--toxicity-sell-ratio-hard", type=Decimal, default=D("0.80"))
+    cl.add_argument("--toxicity-soft-spread-mult", type=Decimal, default=D("1.30"))
+    cl.add_argument("--toxicity-hard-spread-mult", type=Decimal, default=D("1.80"))
+    cl.add_argument("--toxicity-soft-size-mult", type=Decimal, default=D("0.70"))
+    cl.add_argument("--toxicity-hard-size-mult", type=Decimal, default=D("0.40"))
+    cl.add_argument("--inventory-skew-soft-limit", type=Decimal, default=D("0.60"))
+    cl.add_argument("--inventory-skew-hard-limit", type=Decimal, default=D("0.80"))
+    cl.add_argument("--inventory-soft-size-mult", type=Decimal, default=D("0.60"))
+    cl.add_argument("--inventory-hard-size-mult", type=Decimal, default=D("0.20"))
+    cl.add_argument("--inventory-soft-spread-mult", type=Decimal, default=D("1.30"))
+    cl.add_argument("--inventory-hard-spread-mult", type=Decimal, default=D("1.80"))
+    cl.add_argument("--inventory-hard-disable-accumulation-side",
+                    action="store_true", default=True)
+    cl.add_argument("--allow-hard-side-accumulation",
+                    dest="inventory_hard_disable_accumulation_side",
+                    action="store_false")
 
     # AMM specific
     amm = parser.add_argument_group("AMM options")
