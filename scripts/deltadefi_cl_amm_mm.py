@@ -212,8 +212,14 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
     # Auto-scales with concentration so outer wings always sit in the outer
     # portion of the active range, not bunched against inner.
     outer_spread_pct_of_range: Decimal = Field(D("0.60"))
-    outer_range_mult: Decimal = Field(D("2.5"))
-    outer_recenter_trigger_pct: Decimal = Field(D("0.50"))
+    outer_range_mult: Decimal = Field(D("2.5"))   # DEPRECATED — no longer read
+    # Outer wing trigger fires when |price − pool_center| / pool_center
+    # reaches this fraction of the concentration half-width. Always inside
+    # the range, so pool never depletes to 100/0 before recenter.
+    #   0.75 = fire at 75% of half-width (e.g., 3.75% drift at conc=5%)
+    #   Outer order sits at 60% of half-width (outer_spread_pct_of_range),
+    #   so the gap from outer order to trigger is (0.75 - 0.60) × half-width.
+    outer_recenter_trigger_pct: Decimal = Field(D("0.75"))
 
     # Soft recenter: re-anchor range when anchor drifts from range center
     soft_recenter_drift_pct: Decimal = Field(D("2.0"))
@@ -1449,10 +1455,11 @@ class DeltaDefiCLAMM(StrategyV2Base):
         return bid_spread, ask_spread
 
     def _outer_trigger_pct(self) -> float:
-        inner_half = float(self.pool.concentration_pct) / 100
-        outer_half = inner_half * float(self.config.outer_range_mult)
-        wing_half = outer_half - inner_half
-        return inner_half + wing_half * float(self.config.outer_recenter_trigger_pct)
+        """Returns the price-drift threshold at which the outer wing trigger
+        fires (fraction, not %). Always inside the range half-width so the
+        pool can recenter before depleting to 100/0 reserves."""
+        half_width = float(self.pool.concentration_pct) / 100
+        return half_width * float(self.config.outer_recenter_trigger_pct)
 
     def _get_toxicity_profile(self) -> Dict[str, Decimal]:
         cached_seq, cached_val = self._cached_toxicity
