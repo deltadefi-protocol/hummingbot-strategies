@@ -2470,6 +2470,22 @@ class DeltaDefiCLAMM(StrategyV2Base):
 
     # ---- Pool auto-scaling ------------------------------------------------
 
+    def _balanced_pool_depth(self, real_base: Decimal, real_quote: Decimal,
+                             mid: Decimal) -> tuple:
+        """Compute the pool deployment depth using only the SYMMETRIC portion
+        of the wallet (smaller side × 2). This forces a 50:50 value split at
+        the anchor regardless of how unbalanced the wallet (or budget caps)
+        are. The excess on the larger side is reported as idle reserve and
+        is NEVER touched by the strategy — important when the same account
+        runs multiple strategies and budgets must be respected as hard caps.
+        """
+        base_value = real_base * mid
+        balanced_value = min(base_value, real_quote)
+        pool_depth = balanced_value * D(2)  # both sides deploy `balanced_value` each
+        idle_base = real_base - (balanced_value / mid) if base_value > real_quote else ZERO
+        idle_quote = real_quote - balanced_value if real_quote > base_value else ZERO
+        return pool_depth, idle_base, idle_quote
+
     def _init_pool_from_balance(self) -> bool:
         real_base, real_quote = self.balance_gate.get_real_balances()
         if real_base <= ZERO or real_quote <= ZERO:
@@ -2477,13 +2493,19 @@ class DeltaDefiCLAMM(StrategyV2Base):
         mid = self._get_book_mid()
         if mid is None or mid <= ZERO:
             mid = self.config.initial_price
-        pool_depth = real_base * mid + real_quote
+        pool_depth, idle_base, idle_quote = self._balanced_pool_depth(
+            real_base, real_quote, mid)
+        if pool_depth <= ZERO:
+            return False
         self.pool = ConcentratedPool(mid, pool_depth, self.config.base_concentration_pct)
         self._pool_scaled = True
         self._save_state()
+        base_token, quote_token = self.config.trading_pair.split("-")
         self._pair_logger.info(
             f"Initialized CL pool: {self.config.trading_pair} @ {mid} "
-            f"depth={pool_depth:.0f} range=+-{self.config.base_concentration_pct}%"
+            f"depth={pool_depth:.0f} {quote_token} (50:50 value split) "
+            f"range=+-{self.config.base_concentration_pct}% | "
+            f"idle reserves: {idle_base:.2f} {base_token} + {idle_quote:.2f} {quote_token}"
         )
         return True
 
@@ -2499,8 +2521,12 @@ class DeltaDefiCLAMM(StrategyV2Base):
         if mid is None or mid <= ZERO:
             return
 
-        real_total = real_base * mid + real_quote
-        # Estimate pool total from L and current range
+        # Use symmetric portion only — same rule as initial deployment so
+        # auto-scale never expands beyond what budgets allow.
+        target_depth, _, _ = self._balanced_pool_depth(real_base, real_quote, mid)
+        if target_depth <= ZERO:
+            return
+
         sqrt_p = _sqrt(mid)
         sqrt_pa = _sqrt(self.pool.p_lower)
         sqrt_pb = _sqrt(self.pool.p_upper)
@@ -2508,7 +2534,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
         if pool_quote <= ZERO:
             return
 
-        scale = real_total / (pool_quote * D(2))  # approximate: base_val + quote ~= 2*quote at mid
+        scale = target_depth / (pool_quote * D(2))
         if abs(scale - D(1)) < D("0.05"):
             return
 
@@ -2646,6 +2672,9 @@ class DeltaDefiCLAMM(StrategyV2Base):
             f"  VPool: {base_pct:.1f}%B / {quote_pct:.1f}%Q | Skew: {skew:+.3f}",
             f"  Real: {real_base:.2f} {base_token} / {real_quote:.2f} {quote_token}"
             f" | Capital: {total_capital:.1f} {quote_token}",
+            (lambda d: f"  Deployment (50:50 cap): pool={d[0]:.1f} {quote_token} | "
+                       f"idle reserves: {d[1]:.2f} {base_token} + {d[2]:.2f} {quote_token}")
+            (self._balanced_pool_depth(real_base, real_quote, blended_mid)),
             f"  Order: {self.config.order_safe_ratio * 100:.0f}% of max_safe"
             f" = {order_base:.1f} {base_token} ({order_value:.1f} {quote_token})"
             f" | max_safe: {max_safe_str} {base_token}",
