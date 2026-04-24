@@ -1204,6 +1204,30 @@ class BacktestEngine:
 
         metrics = self.tracker.get_metrics()
 
+        # Pull FLAIR/LVR cumulative metrics from the strategy (computed via
+        # 30s post-fill markouts). Normalize to % of initial capital so they
+        # line up with total_return_pct / hold_return_pct.
+        try:
+            snap = self.strategy.get_snapshot()
+            initial_val_f = float(metrics.get("initial_value", 0.0))
+            fee_q = float(snap.get("flair_lifetime_fee", 0.0))
+            lvr_q = float(snap.get("flair_lifetime_lvr", 0.0))
+            net_q = float(snap.get("flair_lifetime_net", 0.0))
+            metrics["flair_lifetime_fee_quote"] = round(fee_q, 4)
+            metrics["flair_lifetime_lvr_quote"] = round(lvr_q, 4)
+            metrics["flair_lifetime_net_quote"] = round(net_q, 4)
+            if initial_val_f > 0:
+                metrics["flair_fee_pct"] = round(fee_q / initial_val_f * 100, 3)
+                metrics["flair_lvr_pct"] = round(lvr_q / initial_val_f * 100, 3)
+                metrics["flair_net_pct"] = round(net_q / initial_val_f * 100, 3)
+                # Strategy excess over a passive LVR-suffering LP:
+                # total_return - flair_net is positive when fees + inventory
+                # P&L exceed the modelled adverse selection cost.
+                metrics["return_minus_flair_net_pct"] = round(
+                    metrics.get("total_return_pct", 0.0) - metrics["flair_net_pct"], 3)
+        except Exception:
+            pass
+
         if not self.quiet:
             self.tracker.print_summary()
 

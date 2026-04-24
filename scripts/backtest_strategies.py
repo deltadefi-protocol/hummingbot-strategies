@@ -645,22 +645,26 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         inv_side = inventory["accumulation_side"]
 
         if self._hedge_position is None:
-            # Open short: toxic buy flow + long inventory accumulation
+            # Spot SHORT (inv_side="buy") → LONG hedge to offset price-rise risk.
+            # Toxicity gate: SELL ratio high = aggressive market buying drove us
+            # short → expect price to keep rising.
             if (inv_side == "buy" and inv_state >= D(1)
-                    and toxicity["buy_state"] >= D(2)):
+                    and toxicity["sell_state"] >= D(2)):
                 size = self.base_balance * self.hedge_size_cap_pct
                 if size > ZERO:
                     self._hedge_pnl -= size * price * self.hedge_taker_fee_bps / D("10000")
-                    self._hedge_position = {"direction": "short", "size": size,
+                    self._hedge_position = {"direction": "long", "size": size,
                                             "entry_price": price, "last_ts": sim_time}
                     self._hedge_fills += 1
-            # Open long: toxic sell flow + short inventory accumulation
+            # Spot LONG (inv_side="sell") → SHORT hedge to offset price-drop risk.
+            # Toxicity gate: BUY ratio high = aggressive market selling drove us
+            # long → expect price to keep dropping.
             elif (inv_side == "sell" and inv_state >= D(1)
-                  and toxicity["sell_state"] >= D(2)):
+                  and toxicity["buy_state"] >= D(2)):
                 size = (self.quote_balance / price) * self.hedge_size_cap_pct
                 if size > ZERO:
                     self._hedge_pnl -= size * price * self.hedge_taker_fee_bps / D("10000")
-                    self._hedge_position = {"direction": "long", "size": size,
+                    self._hedge_position = {"direction": "short", "size": size,
                                             "entry_price": price, "last_ts": sim_time}
                     self._hedge_fills += 1
         else:
@@ -670,11 +674,13 @@ class CLAMMBacktestStrategy(BacktestStrategy):
             self._hedge_pnl -= pos["size"] * price * self.hedge_funding_rate_per_hr * dt_hr
             pos["last_ts"] = sim_time
 
-            # Close when inventory normalizes or direction flips
+            # Close when inventory normalizes or spot side flips:
+            #   LONG hedge (offsets spot SHORT) closes when inv_side != "buy"
+            #   SHORT hedge (offsets spot LONG) closes when inv_side != "sell"
             should_close = (
                 inv_state < D(1)
-                or (pos["direction"] == "short" and inv_side != "buy")
-                or (pos["direction"] == "long" and inv_side != "sell")
+                or (pos["direction"] == "long" and inv_side != "buy")
+                or (pos["direction"] == "short" and inv_side != "sell")
             )
             if should_close:
                 if pos["direction"] == "short":

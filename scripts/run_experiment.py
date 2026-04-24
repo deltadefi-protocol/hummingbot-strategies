@@ -842,13 +842,21 @@ def main():
     if results6:
         r = results6[0]
         print(f"\n  FINAL RESULT (2025 out-of-sample):")
-        print(f"    Total return:   {r.get('total_return_pct', 0):+.2f}%")
-        print(f"    vs HODL:        {r.get('excess_return_pct', 0):+.2f}%")
-        print(f"    Max drawdown:   {r.get('max_drawdown_pct', 0):.2f}%")
-        print(f"    Sharpe:         {r.get('sharpe', 0):.3f}")
-        print(f"    Total fills:    {r.get('total_fills', 0)}")
-        print(f"    Recenters:      {r.get('recenters', 0)}")
-        print(f"    FLAIR roll_fee: {r.get('p_flair_roll_fee', 'n/a')}")
+        print(f"    Total return:        {r.get('total_return_pct', 0):+.2f}%")
+        print(f"    vs HODL:             {r.get('excess_return_pct', 0):+.2f}%")
+        print(f"    FLAIR fee captured:  {r.get('flair_fee_pct', 0):+.2f}% "
+              f"({r.get('flair_lifetime_fee_quote', 0):.2f} quote)")
+        print(f"    FLAIR LVR paid:      {r.get('flair_lvr_pct', 0):+.2f}% "
+              f"({r.get('flair_lifetime_lvr_quote', 0):.2f} quote)")
+        print(f"    FLAIR net (fee-LVR): {r.get('flair_net_pct', 0):+.2f}% "
+              f"(positive = fees > adverse selection)")
+        print(f"    Strategy vs FLAIR:   "
+              f"{r.get('return_minus_flair_net_pct', 0):+.2f}% "
+              f"(extra alpha beyond modelled LVR)")
+        print(f"    Max drawdown:        {r.get('max_drawdown_pct', 0):.2f}%")
+        print(f"    Sharpe:              {r.get('sharpe', 0):.3f}")
+        print(f"    Total fills:         {r.get('total_fills', 0)}")
+        print(f"    Recenters:           {r.get('recenters', 0)}")
 
     print(f"\n  BEST PARAMETERS:")
     key_params = [

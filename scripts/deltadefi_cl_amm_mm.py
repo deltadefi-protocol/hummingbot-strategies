@@ -15,7 +15,8 @@ from pydantic import Field, model_validator
 
 from hummingbot.client.settings import DEFAULT_LOG_FILE_PATH
 from hummingbot.connector.connector_base import ConnectorBase
-from hummingbot.core.data_type.common import OrderType, TradeType
+from hummingbot.core.data_type.common import OrderType, PositionAction, TradeType
+from hummingbot.core.event.events import MarketOrderFailureEvent, OrderCancelledEvent
 from hummingbot.core.event.events import OrderFilledEvent
 from hummingbot.core.rate_oracle.rate_oracle import RateOracle
 from hummingbot.core.utils.async_utils import safe_ensure_future
@@ -41,6 +42,108 @@ class OrderProposal(NamedTuple):
     side: TradeType
     price: Decimal
     size: Decimal
+
+
+class AvgCostBook:
+    """O(1) weighted-average-cost position tracker.
+
+    Tracks one open position at a time. Same-side fills blend into avg_cost;
+    opposite-side fills realize P&L at the current avg_cost. A fill larger
+    than the open position closes it and flips the side.
+
+    Used for both spot trading P&L and futures hedge P&L — same math applies.
+    """
+
+    __slots__ = ("size", "avg_cost", "side", "realized_pnl", "fees")
+
+    def __init__(self):
+        self.size: Decimal = ZERO
+        self.avg_cost: Decimal = ZERO
+        self.side: Optional[str] = None  # "long" | "short" | None
+        self.realized_pnl: Decimal = ZERO
+        self.fees: Decimal = ZERO
+
+    def apply_fill(self, side: str, size: Decimal, price: Decimal, fee: Decimal):
+        """Apply a fill. side is 'long' (buy) or 'short' (sell).
+        Returns the realized P&L delta from this fill (0 if same side or open)."""
+        self.fees += fee
+        if size <= ZERO or price <= ZERO:
+            return ZERO
+
+        delta = ZERO
+        if self.side is None or self.size <= ZERO:
+            # Open new
+            self.side = side
+            self.size = size
+            self.avg_cost = price
+        elif self.side == side:
+            # Blend into weighted avg
+            new_size = self.size + size
+            self.avg_cost = (self.size * self.avg_cost + size * price) / new_size
+            self.size = new_size
+        elif size <= self.size:
+            # Partial / full close
+            if self.side == "long":
+                delta = size * (price - self.avg_cost)
+            else:
+                delta = size * (self.avg_cost - price)
+            self.realized_pnl += delta
+            self.size -= size
+            if self.size <= ZERO:
+                self.side = None
+                self.size = ZERO
+                self.avg_cost = ZERO
+        else:
+            # Flip
+            if self.side == "long":
+                delta = self.size * (price - self.avg_cost)
+            else:
+                delta = self.size * (self.avg_cost - price)
+            self.realized_pnl += delta
+            leftover = size - self.size
+            self.side = side
+            self.size = leftover
+            self.avg_cost = price
+        return delta
+
+    def signed_position(self) -> Decimal:
+        """+ for long, - for short, 0 for flat."""
+        if self.size <= ZERO or self.side is None:
+            return ZERO
+        return self.size if self.side == "long" else -self.size
+
+    def unrealized(self, mid: Optional[Decimal]) -> Optional[Decimal]:
+        """Mark-to-market on the open position. None if mid unavailable."""
+        signed = self.signed_position()
+        if signed == ZERO:
+            return ZERO
+        if mid is None or mid <= ZERO:
+            return None
+        return signed * (mid - self.avg_cost)
+
+    def to_dict(self, prefix: str = "") -> dict:
+        return {
+            f"{prefix}size": str(self.size),
+            f"{prefix}avg_cost": str(self.avg_cost),
+            f"{prefix}side": self.side or "",
+            f"{prefix}realized_pnl": str(self.realized_pnl),
+            f"{prefix}fees": str(self.fees),
+        }
+
+    def load_from(self, state: dict, prefix: str = ""):
+        """Restore from a dict produced by to_dict()."""
+        try:
+            sz = D(str(state.get(f"{prefix}size", "0")))
+            av = D(str(state.get(f"{prefix}avg_cost", "0")))
+            sd = state.get(f"{prefix}side") or ""
+            if sz > ZERO and av > ZERO and sd in ("long", "short"):
+                self.size = sz
+                self.avg_cost = av
+                self.side = sd
+            self.realized_pnl = D(str(state.get(f"{prefix}realized_pnl", "0")))
+            self.fees = D(str(state.get(f"{prefix}fees", "0")))
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +204,12 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
     trend_order_scale_factor: Decimal = Field(D("0.0"))
     trend_halt_threshold: Decimal = Field(D("0.0"))
 
+    # Outer range architecture (inner/outer zone split)
+    outer_capital_fraction: Decimal = Field(D("0.30"))
+    outer_spread_mult: Decimal = Field(D("2.5"))
+    outer_range_mult: Decimal = Field(D("2.5"))
+    outer_recenter_trigger_pct: Decimal = Field(D("0.50"))
+
     # Soft recenter: re-anchor range when anchor drifts from range center
     soft_recenter_drift_pct: Decimal = Field(D("2.0"))
 
@@ -108,6 +217,30 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
     enable_rebalance: bool = Field(True)
     rebalance_max_slippage_bps: Decimal = Field(D("30"))
     rebalance_partial_fraction: Decimal = Field(D("0.5"))
+    rebalance_lvr_threshold_pct: Decimal = Field(D("0.30"))
+
+    # Futures hedge overlay (Binance perpetual)
+    enable_hedge: bool = Field(False)
+    hedge_exchange: str = Field("binance_perpetual_testnet")
+    hedge_trading_pair: str = Field("ADA-USDT")
+    hedge_size_cap_pct: Decimal = Field(D("0.30"))   # max hedge as % of spot inventory
+    hedge_min_notional_quote: Decimal = Field(D("10"))  # skip if too small
+    hedge_leverage: int = Field(2)                    # set on connector at start
+    hedge_min_state_change_interval_sec: int = Field(60)  # debounce open/close cycling
+    hedge_in_flight_timeout_sec: int = Field(30)      # release latch if no fill/fail event
+    # Concentration-scaled toxicity gate.
+    # Tight range (min_conc) → HIGH bar: fills are frequent so buy_ratio is
+    # noisy; require strong consensus to avoid false positives.
+    # Loose range (max_conc) → LOW bar: fills are sparse and each one carries
+    # more inventory impact; modest imbalance already worth hedging.
+    hedge_toxicity_threshold_at_min_conc: Decimal = Field(D("0.75"))
+    hedge_toxicity_threshold_at_max_conc: Decimal = Field(D("0.55"))
+    # Concentration-scaled inventory skew gate (replaces the discrete
+    # inv_state >= soft check). Threshold = activation_fraction × δ/c, where
+    # δ = soft_recenter_drift_pct/100 and c = current concentration_pct/100.
+    # See docs §1: max_skew(c, δ) ≈ δ/c — the threshold must be reachable
+    # within one recenter window.
+    hedge_inventory_skew_activation_fraction: Decimal = Field(D("0.60"))
 
     # Order generation
     num_levels: int = Field(1)
@@ -793,7 +926,11 @@ class DeltaDefiCLAMM(StrategyV2Base):
 
     @classmethod
     def init_markets(cls, config: DeltaDefiCLAMMConfig):
-        cls.markets = {config.exchange: {config.trading_pair}}
+        markets = {config.exchange: {config.trading_pair}}
+        if config.enable_hedge:
+            markets.setdefault(config.hedge_exchange, set()).add(
+                config.hedge_trading_pair)
+        cls.markets = markets
 
     def __init__(self, connectors: Dict[str, ConnectorBase], config: Optional[DeltaDefiCLAMMConfig] = None):
         super().__init__(connectors, config)
@@ -869,6 +1006,71 @@ class DeltaDefiCLAMM(StrategyV2Base):
         self._flair_lifetime_fee: Decimal = ZERO
         self._flair_lifetime_lvr: Decimal = ZERO
         self._flair_lifetime_net: Decimal = ZERO
+
+        # Post-fill adverse selection tracking (+1m, +5m, +15m markouts)
+        self._adverse_pending: deque = deque(maxlen=12000)
+        self._adverse_stats = {
+            "1m":  {"count": 0, "total_move": 0.0, "adverse_count": 0},
+            "5m":  {"count": 0, "total_move": 0.0, "adverse_count": 0},
+            "15m": {"count": 0, "total_move": 0.0, "adverse_count": 0},
+        }
+
+        # LVR accumulator for rebalance decision
+        self._lvr_since_reposition: Decimal = ZERO
+        self._fills_since_reposition: int = 0
+
+        # Per-tick caches (invalidated by self._tick_seq)
+        self._tick_seq: int = 0
+        self._cached_toxicity: tuple = (-1, None)  # (tick_seq, profile)
+        self._cached_inventory: tuple = (-1, None)
+
+        # Trading P&L: shared avg-cost book (spot + hedge)
+        self._spot_book = AvgCostBook()
+        self._hedge_book = AvgCostBook()
+        self._hedge_fills: int = 0
+        # Pending hedge order ids so we can route fills correctly even if the
+        # trading_pair check is ambiguous.
+        self._hedge_order_ids: set = set()
+        self._hedge_in_flight: bool = False  # avoid double-firing
+        self._hedge_in_flight_ts: float = 0.0
+        self._hedge_leverage_set: bool = False
+        self._hedge_last_state_change_ts: float = 0.0
+        # Throttle "connector unavailable" warnings to once per 60s
+        self._hedge_unavailable_warned_ts: float = 0.0
+        if state:
+            # Spot — try new keys, then legacy "position_*" / FIFO lots
+            if "spot_size" in state:
+                self._spot_book.load_from(state, prefix="spot_")
+            elif "position_size" in state:
+                self._spot_book.load_from({
+                    "size": state.get("position_size", "0"),
+                    "avg_cost": state.get("position_avg_cost", "0"),
+                    "side": state.get("position_side", ""),
+                    "realized_pnl": state.get("realized_pnl", "0"),
+                    "fees": state.get("cumulative_fees", "0"),
+                })
+            elif "position_lots" in state:
+                # Collapse old FIFO lots into a single avg
+                try:
+                    lots = state.get("position_lots") or []
+                    total_sz = sum(D(str(e[0])) for e in lots if D(str(e[0])) > ZERO)
+                    total_n = sum(D(str(e[0])) * D(str(e[1])) for e in lots
+                                  if D(str(e[0])) > ZERO and D(str(e[1])) > ZERO)
+                    sd = state.get("position_side") or ""
+                    if total_sz > ZERO and sd in ("long", "short"):
+                        self._spot_book.size = total_sz
+                        self._spot_book.avg_cost = total_n / total_sz
+                        self._spot_book.side = sd
+                    self._spot_book.realized_pnl = D(str(state.get("realized_pnl", "0")))
+                    self._spot_book.fees = D(str(state.get("cumulative_fees", "0")))
+                except Exception:
+                    pass
+            # Hedge
+            self._hedge_book.load_from(state, prefix="hedge_")
+            try:
+                self._hedge_fills = int(state.get("hedge_fills", 0) or 0)
+            except Exception:
+                pass
         self._last_max_safe: Decimal = ZERO
         self._rebalancing: bool = False
         self._last_rebalance_action: str = ""
@@ -884,6 +1086,9 @@ class DeltaDefiCLAMM(StrategyV2Base):
     def on_tick(self):
         if self._stopped:
             return
+
+        # Invalidate per-tick caches at the start of each tick
+        self._tick_seq += 1
 
         connector = self.connectors[self.config.exchange]
         if self.config.trading_pair not in connector.trading_rules:
@@ -904,9 +1109,27 @@ class DeltaDefiCLAMM(StrategyV2Base):
         if book_mid:
             self._update_anchor_ema(book_mid)
             self._update_flair_monitor(book_mid)
+            self._resolve_adverse_markouts(book_mid)
 
-        # Hard recenter: book mid exits bounds
-        if book_mid and not self.pool.is_in_range(book_mid):
+        # Outer wing trigger: fire when price drifts past outer zone from pool center
+        _recentered = False
+        if book_mid:
+            pool_center = (self.pool.p_lower + self.pool.p_upper) / D(2)
+            if pool_center > ZERO:
+                price_drift = float(abs(book_mid - pool_center) / pool_center)
+                outer_trig = self._outer_trigger_pct()
+                if price_drift >= outer_trig:
+                    self._pair_logger.info(
+                        f"Outer wing trigger: drift {price_drift*100:.2f}% >= "
+                        f"{outer_trig*100:.2f}% from pool center {pool_center:.6f}")
+                    self.pool.recenter(book_mid)
+                    self._last_reposition_price = book_mid
+                    self._save_state()
+                    safe_ensure_future(self._conditional_rebalance(book_mid))
+                    _recentered = True
+
+        # Hard recenter: book mid exits bounds (fallback if outer trigger didn't catch it)
+        if not _recentered and book_mid and not self.pool.is_in_range(book_mid):
             self._pair_logger.info(
                 f"Hard recenter: book_mid {book_mid:.6f} outside "
                 f"[{self.pool.p_lower:.6f}, {self.pool.p_upper:.6f}]"
@@ -915,9 +1138,10 @@ class DeltaDefiCLAMM(StrategyV2Base):
             self._last_reposition_price = book_mid
             self._save_state()
             safe_ensure_future(self._conditional_rebalance(book_mid))
+            _recentered = True
 
         # Soft recenter: anchor drifted from range center (price still in range)
-        elif book_mid and self.config.soft_recenter_drift_pct > ZERO:
+        if not _recentered and book_mid and self.config.soft_recenter_drift_pct > ZERO:
             range_center = (self.pool.p_lower + self.pool.p_upper) / D(2)
             if range_center > ZERO:
                 drift_pct = abs(self.pool.anchor_price - range_center) / range_center * D(100)
@@ -931,9 +1155,11 @@ class DeltaDefiCLAMM(StrategyV2Base):
                     self._save_state()
                     safe_ensure_future(self._conditional_rebalance(self.pool.anchor_price))
 
-        # Gap detection heartbeat: catches flash crashes that skip the outer wing trigger
+        # Gap detection heartbeat: catches flash crashes that skip the outer wing trigger.
+        # Skip if we've already recentered this tick — outer/hard/soft already handled it.
         now_ts = time.time()
-        if (book_mid and self._last_reposition_price and self._last_reposition_price > ZERO
+        if (not _recentered and book_mid and self._last_reposition_price
+                and self._last_reposition_price > ZERO
                 and now_ts - self._gap_check_ts >= 30.0):
             self._gap_check_ts = now_ts
             gap_pct = float(abs(book_mid - self._last_reposition_price) / self._last_reposition_price)
@@ -950,6 +1176,10 @@ class DeltaDefiCLAMM(StrategyV2Base):
 
         # Dynamic range update from indicators
         self._update_dynamic_range(connector)
+
+        # Futures hedge check
+        if self.config.enable_hedge:
+            self._check_and_update_hedge()
 
         # Don't place orders while refreshing
         if self._refreshing:
@@ -1088,110 +1318,116 @@ class DeltaDefiCLAMM(StrategyV2Base):
 
         halt_thresh = float(self.config.trend_halt_threshold)
         if halt_thresh > 0 and eff_trend >= halt_thresh:
-            return orders  # empty
+            return orders
 
         scale_factor = float(self.config.trend_order_scale_factor)
         trend_scale = max(0.0, 1.0 - scale_factor * eff_trend)
         if trend_scale <= 0.0:
-            return orders  # empty
+            return orders
 
         max_safe_base = self._max_safe_order_base()
         order_base = max_safe_base * self.config.order_safe_ratio * D(str(round(trend_scale, 6)))
         order_value = order_base * mid_price
 
-        weights = [self.config.size_decay ** i for i in range(self.config.num_levels)]
-        total_weight = sum(weights)
-        if total_weight <= ZERO:
-            return orders
-
         connector = self.connectors[self.config.exchange]
         pair = self.config.trading_pair
-
         toxicity = self._get_toxicity_profile()
         inventory = self._inventory_adjustments()
-
         momentum_bid_extra, momentum_ask_extra = self._momentum_spread_adjustment()
 
-        for i in range(self.config.num_levels):
-            base_spread = self.config.base_spread_bps * (self.config.spread_multiplier ** i) / D("10000")
-            w = weights[i] / total_weight
-            layer_value = order_value * w
+        inner_spread = self.config.base_spread_bps / D("10000")
+        inner_value = order_value * (D(1) - self.config.outer_capital_fraction)
+        orders += self._make_order_pair(
+            mid_price, inner_spread, inner_value, toxicity, inventory,
+            momentum_bid_extra, momentum_ask_extra, connector, pair, outer_zone=False)
 
-            if self.config.enable_asymmetric_spread:
-                bid_spread, ask_spread = self._asymmetric_spreads(base_spread)
-            else:
-                bid_spread, ask_spread = base_spread, base_spread
-
-            if toxicity["buy_state"] >= D(2):
-                bid_spread *= self.config.toxicity_hard_spread_mult
-            elif toxicity["buy_state"] >= D(1):
-                bid_spread *= self.config.toxicity_soft_spread_mult
-            if toxicity["sell_state"] >= D(2):
-                ask_spread *= self.config.toxicity_hard_spread_mult
-            elif toxicity["sell_state"] >= D(1):
-                ask_spread *= self.config.toxicity_soft_spread_mult
-
-            if inventory["state"] >= D(2):
-                if inventory["accumulation_side"] == "buy":
-                    bid_spread *= self.config.inventory_hard_spread_mult
-                elif inventory["accumulation_side"] == "sell":
-                    ask_spread *= self.config.inventory_hard_spread_mult
-            elif inventory["state"] >= D(1):
-                if inventory["accumulation_side"] == "buy":
-                    bid_spread *= self.config.inventory_soft_spread_mult
-                elif inventory["accumulation_side"] == "sell":
-                    ask_spread *= self.config.inventory_soft_spread_mult
-
-            bid_spread += momentum_bid_extra
-            ask_spread += momentum_ask_extra
-
-            ask_price = mid_price * (D(1) + ask_spread)
-            bid_price = mid_price * (D(1) - bid_spread)
-
-            ask_size = layer_value / ask_price if ask_price > ZERO else ZERO
-            bid_size = layer_value / bid_price if bid_price > ZERO else ZERO
-
-            if toxicity["buy_state"] >= D(2):
-                bid_size *= self.config.toxicity_hard_size_mult
-            elif toxicity["buy_state"] >= D(1):
-                bid_size *= self.config.toxicity_soft_size_mult
-            if toxicity["sell_state"] >= D(2):
-                ask_size *= self.config.toxicity_hard_size_mult
-            elif toxicity["sell_state"] >= D(1):
-                ask_size *= self.config.toxicity_soft_size_mult
-
-            if inventory["state"] >= D(2):
-                if inventory["accumulation_side"] == "buy":
-                    if self.config.inventory_hard_disable_accumulation_side:
-                        bid_size = ZERO
-                    else:
-                        bid_size *= self.config.inventory_hard_size_mult
-                elif inventory["accumulation_side"] == "sell":
-                    if self.config.inventory_hard_disable_accumulation_side:
-                        ask_size = ZERO
-                    else:
-                        ask_size *= self.config.inventory_hard_size_mult
-            elif inventory["state"] >= D(1):
-                if inventory["accumulation_side"] == "buy":
-                    bid_size *= self.config.inventory_soft_size_mult
-                elif inventory["accumulation_side"] == "sell":
-                    ask_size *= self.config.inventory_soft_size_mult
-
-            if self.config.enable_order_randomization:
-                ask_size = self._randomize(ask_size)
-                bid_size = self._randomize(bid_size)
-
-            ask_price = self._quantize_price(connector, pair, ask_price)
-            bid_price = self._quantize_price(connector, pair, bid_price)
-            ask_size = self._quantize_amount(connector, pair, ask_size)
-            bid_size = self._quantize_amount(connector, pair, bid_size)
-
-            if ask_size > ZERO:
-                orders.append(OrderProposal(TradeType.SELL, ask_price, ask_size))
-            if bid_size > ZERO:
-                orders.append(OrderProposal(TradeType.BUY, bid_price, bid_size))
+        outer_spread = inner_spread * self.config.outer_spread_mult
+        outer_value = order_value * self.config.outer_capital_fraction
+        orders += self._make_order_pair(
+            mid_price, outer_spread, outer_value, toxicity, inventory,
+            momentum_bid_extra, momentum_ask_extra, connector, pair, outer_zone=True)
 
         return orders
+
+    def _make_order_pair(self, mid_price: Decimal, base_spread: Decimal,
+                         total_value: Decimal, toxicity: dict, inventory: dict,
+                         momentum_bid_extra: Decimal, momentum_ask_extra: Decimal,
+                         connector, pair: str, outer_zone: bool = False) -> List[OrderProposal]:
+        if self.config.enable_asymmetric_spread:
+            bid_spread, ask_spread = self._asymmetric_spreads(base_spread)
+        else:
+            bid_spread, ask_spread = base_spread, base_spread
+
+        if toxicity["buy_state"] >= D(2):
+            bid_spread *= self.config.toxicity_hard_spread_mult
+        elif toxicity["buy_state"] >= D(1):
+            bid_spread *= self.config.toxicity_soft_spread_mult
+        if toxicity["sell_state"] >= D(2):
+            ask_spread *= self.config.toxicity_hard_spread_mult
+        elif toxicity["sell_state"] >= D(1):
+            ask_spread *= self.config.toxicity_soft_spread_mult
+
+        if inventory["state"] >= D(2):
+            if inventory["accumulation_side"] == "buy":
+                bid_spread *= self.config.inventory_hard_spread_mult
+            elif inventory["accumulation_side"] == "sell":
+                ask_spread *= self.config.inventory_hard_spread_mult
+        elif inventory["state"] >= D(1):
+            if inventory["accumulation_side"] == "buy":
+                bid_spread *= self.config.inventory_soft_spread_mult
+            elif inventory["accumulation_side"] == "sell":
+                ask_spread *= self.config.inventory_soft_spread_mult
+
+        bid_spread += momentum_bid_extra
+        ask_spread += momentum_ask_extra
+
+        ask_price = mid_price * (D(1) + ask_spread)
+        bid_price = mid_price * (D(1) - bid_spread)
+
+        ask_size = total_value / ask_price if ask_price > ZERO else ZERO
+        bid_size = total_value / bid_price if bid_price > ZERO else ZERO
+
+        if toxicity["buy_state"] >= D(2):
+            bid_size *= self.config.toxicity_hard_size_mult
+        elif toxicity["buy_state"] >= D(1):
+            bid_size *= self.config.toxicity_soft_size_mult
+        if toxicity["sell_state"] >= D(2):
+            ask_size *= self.config.toxicity_hard_size_mult
+        elif toxicity["sell_state"] >= D(1):
+            ask_size *= self.config.toxicity_soft_size_mult
+
+        if inventory["state"] >= D(2):
+            if inventory["accumulation_side"] == "buy":
+                if self.config.inventory_hard_disable_accumulation_side:
+                    bid_size = ZERO
+                else:
+                    bid_size *= self.config.inventory_hard_size_mult
+            elif inventory["accumulation_side"] == "sell":
+                if self.config.inventory_hard_disable_accumulation_side:
+                    ask_size = ZERO
+                else:
+                    ask_size *= self.config.inventory_hard_size_mult
+        elif inventory["state"] >= D(1):
+            if inventory["accumulation_side"] == "buy":
+                bid_size *= self.config.inventory_soft_size_mult
+            elif inventory["accumulation_side"] == "sell":
+                ask_size *= self.config.inventory_soft_size_mult
+
+        if self.config.enable_order_randomization:
+            ask_size = self._randomize(ask_size)
+            bid_size = self._randomize(bid_size)
+
+        ask_price = self._quantize_price(connector, pair, ask_price)
+        bid_price = self._quantize_price(connector, pair, bid_price)
+        ask_size = self._quantize_amount(connector, pair, ask_size)
+        bid_size = self._quantize_amount(connector, pair, bid_size)
+
+        result = []
+        if ask_size > ZERO:
+            result.append(OrderProposal(TradeType.SELL, ask_price, ask_size))
+        if bid_size > ZERO:
+            result.append(OrderProposal(TradeType.BUY, bid_price, bid_size))
+        return result
 
     def _asymmetric_spreads(self, base_spread: Decimal):
         skew = D(str(self.pool.get_inventory_skew()))
@@ -1201,7 +1437,21 @@ class DeltaDefiCLAMM(StrategyV2Base):
         ask_spread = max(base_spread * (D(1) - skew * sens), floor)
         return bid_spread, ask_spread
 
+    def _outer_trigger_pct(self) -> float:
+        inner_half = float(self.pool.concentration_pct) / 100
+        outer_half = inner_half * float(self.config.outer_range_mult)
+        wing_half = outer_half - inner_half
+        return inner_half + wing_half * float(self.config.outer_recenter_trigger_pct)
+
     def _get_toxicity_profile(self) -> Dict[str, Decimal]:
+        cached_seq, cached_val = self._cached_toxicity
+        if cached_seq == self._tick_seq and cached_val is not None:
+            return cached_val
+        val = self._compute_toxicity_profile()
+        self._cached_toxicity = (self._tick_seq, val)
+        return val
+
+    def _compute_toxicity_profile(self) -> Dict[str, Decimal]:
         # Fill-count window: use last N fills regardless of elapsed time
         window_n = self.config.toxicity_window_fills
         recent = list(self._toxicity_recent_fills)[-window_n:]
@@ -1290,6 +1540,14 @@ class DeltaDefiCLAMM(StrategyV2Base):
         return math.sqrt(short_var / long_var)
 
     def _inventory_adjustments(self) -> Dict[str, object]:
+        cached_seq, cached_val = self._cached_inventory
+        if cached_seq == self._tick_seq and cached_val is not None:
+            return cached_val
+        val = self._compute_inventory_adjustments()
+        self._cached_inventory = (self._tick_seq, val)
+        return val
+
+    def _compute_inventory_adjustments(self) -> Dict[str, object]:
         skew = D(str(self.pool.get_inventory_skew()))
         abs_skew = abs(skew)
         soft = self.config.inventory_skew_soft_limit
@@ -1391,6 +1649,9 @@ class DeltaDefiCLAMM(StrategyV2Base):
             self._flair_lifetime_lvr += lvr_quote
             self._flair_lifetime_net += flair_net
 
+            # Accumulate LVR since last reposition for LVR-based rebalance decision
+            self._lvr_since_reposition += lvr_quote
+
             self._flair_events.append((now_ts, fee_quote, lvr_quote, flair_net))
             self._flair_roll_fee += fee_quote
             self._flair_roll_lvr += lvr_quote
@@ -1415,6 +1676,65 @@ class DeltaDefiCLAMM(StrategyV2Base):
             "pending": D(str(len(self._flair_pending))),
             "samples": D(str(len(self._flair_events))),
         }
+
+    # ---- Post-fill adverse selection (1m / 5m / 15m markouts) ----
+
+    _ADVERSE_HORIZONS = (("1m", 60), ("5m", 300), ("15m", 900))
+
+    def _queue_adverse_markout(self, event: OrderFilledEvent):
+        now_ts = time.time()
+        fill_price = self._to_decimal(event.price)
+        amount = self._to_decimal(event.amount)
+        for label, sec in self._ADVERSE_HORIZONS:
+            self._adverse_pending.append((
+                now_ts + sec, label, event.trade_type, fill_price, amount))
+
+    def _resolve_adverse_markouts(self, book_mid: Optional[Decimal]):
+        if book_mid is None or book_mid <= ZERO:
+            return
+        now_ts = time.time()
+        # _adverse_pending is not ordered by deadline (3 horizons interleave),
+        # so iterate-and-filter rather than popleft.
+        kept = deque(maxlen=self._adverse_pending.maxlen)
+        for entry in self._adverse_pending:
+            deadline, label, side, fill_price, amount = entry
+            if deadline > now_ts:
+                kept.append(entry)
+                continue
+            if side == TradeType.BUY:
+                adverse_pct = float((fill_price - book_mid) / fill_price) if fill_price > ZERO else 0.0
+            else:
+                adverse_pct = float((book_mid - fill_price) / fill_price) if fill_price > ZERO else 0.0
+            stats = self._adverse_stats[label]
+            stats["count"] += 1
+            stats["total_move"] += adverse_pct
+            if adverse_pct > 0:
+                stats["adverse_count"] += 1
+        self._adverse_pending = kept
+
+    def _adverse_summary_str(self) -> str:
+        parts = []
+        for label, _ in self._ADVERSE_HORIZONS:
+            s = self._adverse_stats[label]
+            if s["count"] == 0:
+                parts.append(f"{label}=n/a")
+            else:
+                avg = s["total_move"] / s["count"] * 100
+                parts.append(f"{label}={avg:+.3f}%")
+        return " ".join(parts)
+
+    def _adverse_status_lines(self) -> str:
+        parts = []
+        for label, _ in self._ADVERSE_HORIZONS:
+            s = self._adverse_stats[label]
+            if s["count"] == 0:
+                parts.append(f"{label}=n/a")
+            else:
+                avg = s["total_move"] / s["count"] * 100
+                parts.append(
+                    f"{label}={avg:+.3f}% "
+                    f"({s['adverse_count']}/{s['count']} adverse)")
+        return " | ".join(parts)
 
     def _momentum_spread_adjustment(self):
         if not self.config.enable_momentum_spread:
@@ -1520,36 +1840,44 @@ class DeltaDefiCLAMM(StrategyV2Base):
     # ---- Conditional rebalance after recenter ------------------------------
 
     def _should_rebalance(self) -> tuple:
-        """Decide rebalance fraction based on HMM regime.
+        """Decide rebalance fraction by comparing accumulated adverse selection
+        cost (FLAIR LVR since last reposition) against the rebalance slippage
+        budget. Only rebalance when leakage exceeds the cost of rebalancing.
 
         Returns (fraction, reason):
-          fraction=0   → skip rebalance
-          fraction=0.5 → partial (uncertain regime)
-          fraction=1.0 → full rebalance
+          fraction=0   → skip rebalance (cheaper to leave inventory alone)
+          fraction=1.0 → full rebalance (LVR exceeds slippage budget)
         """
         if not self.config.enable_rebalance:
             return 0.0, "disabled"
 
-        hmm = self._last_hmm
-        threshold = float(self.config.hmm_confidence_threshold)
+        book_mid = self._get_book_mid()
+        if book_mid is None or book_mid <= ZERO:
+            return 0.0, "no book mid"
 
-        if hmm is None:
-            # HMM not warmed up — don't rebalance without regime confidence
-            return 0.0, "HMM warming up"
+        real_base, real_quote = self.balance_gate.get_real_balances()
+        total_capital = real_base * book_mid + real_quote
+        if total_capital <= ZERO:
+            return 0.0, "no capital"
 
-        if hmm.get("ranging", 0) > threshold:
-            return 1.0, f"HMM ranging {hmm['ranging']:.0%}"
+        lvr_pct = float(self._lvr_since_reposition / total_capital * D(100))
+        threshold = float(self.config.rebalance_lvr_threshold_pct)
 
-        # Trending or uncertain — don't rebalance
-        if hmm.get("trending", 0) > threshold:
-            return 0.0, f"HMM trending {hmm['trending']:.0%}"
-
-        return 0.0, "HMM uncertain"
+        if lvr_pct >= threshold:
+            return 1.0, (
+                f"LVR {lvr_pct:.3f}% >= {threshold}% "
+                f"({self._fills_since_reposition} fills)")
+        return 0.0, (
+            f"LVR {lvr_pct:.3f}% < {threshold}% "
+            f"({self._fills_since_reposition} fills)")
 
     async def _conditional_rebalance(self, book_mid: Decimal):
         """After recenter, optionally place a market order to realign real
         balance with the virtual pool's balanced reserves."""
         fraction, reason = self._should_rebalance()
+        # Reset LVR-since-reposition counter regardless — the decision is made
+        self._lvr_since_reposition = ZERO
+        self._fills_since_reposition = 0
         if fraction <= 0:
             self._last_rebalance_action = f"skip ({reason})"
             self._pair_logger.info(f"Rebalance skipped: {reason}")
@@ -1601,19 +1929,325 @@ class DeltaDefiCLAMM(StrategyV2Base):
         else:
             self._last_rebalance_action = f"balanced ({reason})"
 
+    # ---- Futures hedge ----------------------------------------------------
+
+    def _hedge_connector(self):
+        if not self.config.enable_hedge:
+            return None
+        return self.connectors.get(self.config.hedge_exchange)
+
+    def _hedge_book_mid(self) -> Optional[Decimal]:
+        c = self._hedge_connector()
+        if c is None:
+            return None
+        try:
+            mid = c.get_mid_price(self.config.hedge_trading_pair)
+            return mid if mid is not None and mid > ZERO else None
+        except Exception:
+            return None
+
+    def _hedge_status(self) -> tuple:
+        """Returns (ready, status_string). ready=False means hedge can't fire.
+        Common reasons: connector not registered (config or workflow issue),
+        connector still warming up, no order book data yet."""
+        if not self.config.enable_hedge:
+            return False, "disabled"
+        c = self._hedge_connector()
+        if c is None:
+            return False, (
+                f"connector '{self.config.hedge_exchange}' not loaded — "
+                f"run `connect {self.config.hedge_exchange}` in Hummingbot "
+                f"client BEFORE starting strategy")
+        # Hummingbot connectors expose `ready` (dict) and `status_dict`
+        is_ready = getattr(c, "ready", True)
+        if isinstance(is_ready, dict):
+            is_ready = all(is_ready.values())
+        if not is_ready:
+            return False, f"connector '{self.config.hedge_exchange}' warming up"
+        if self._hedge_book_mid() is None:
+            return False, f"no order book data for '{self.config.hedge_trading_pair}' yet"
+        return True, "ready"
+
+    def _warn_hedge_unavailable(self, reason: str):
+        """Emit a warning at most once per 60 seconds about why hedge can't fire."""
+        now = time.time()
+        if now - self._hedge_unavailable_warned_ts < 60.0:
+            return
+        self._hedge_unavailable_warned_ts = now
+        self._pair_logger.warning(f"Hedge unavailable: {reason}")
+
+    def _hedge_inventory_skew_threshold(self) -> Decimal:
+        """Inventory skew threshold for hedge trigger, derived analytically
+        from concentration. Using max_skew(c, δ) ≈ δ/c (see docs §1), the
+        threshold = activation_fraction × δ/c. Tight ranges → high threshold
+        (more skew naturally reachable), loose ranges → low threshold.
+        Clamped to [0.03, 0.50] for safety.
+        """
+        cfg = self.config
+        if self.pool is None:
+            return D("0.20")
+        c = float(self.pool.concentration_pct) / 100.0
+        delta = float(cfg.soft_recenter_drift_pct) / 100.0
+        if c <= 0:
+            return D("0.20")
+        natural_max = delta / c
+        activation = float(cfg.hedge_inventory_skew_activation_fraction)
+        threshold = natural_max * activation
+        return D(str(max(0.03, min(0.50, threshold))))
+
+    def _hedge_toxicity_threshold(self) -> Decimal:
+        """Toxicity ratio threshold for hedge trigger, scaled linearly by
+        current concentration. Threshold typically DECREASES as concentration
+        widens — calm/tight regimes need strong consensus to filter noise,
+        volatile/loose regimes need a lower bar because each fill carries
+        more inventory impact.
+        """
+        cfg = self.config
+        cur = self.pool.concentration_pct if self.pool is not None else cfg.min_concentration_pct
+        min_c = cfg.min_concentration_pct
+        max_c = cfg.max_concentration_pct
+        thresh_at_min = cfg.hedge_toxicity_threshold_at_min_conc
+        thresh_at_max = cfg.hedge_toxicity_threshold_at_max_conc
+        if max_c <= min_c:
+            return thresh_at_min
+        span = (cur - min_c) / (max_c - min_c)
+        if span < ZERO:
+            span = ZERO
+        elif span > D(1):
+            span = D(1)
+        return thresh_at_min + span * (thresh_at_max - thresh_at_min)
+
+    def _check_and_update_hedge(self):
+        """Open/close a futures hedge based on toxicity + inventory accumulation.
+        Mirrors the backtest mock but places real market orders on the hedge
+        connector. Idempotent — safe to call every tick."""
+        if not self.config.enable_hedge:
+            return
+
+        # Visible readiness check — without this, the gate silently does
+        # nothing when the connector is missing/warming, and operators have
+        # no idea the hedge subsystem isn't running.
+        ready, status = self._hedge_status()
+        if not ready:
+            self._warn_hedge_unavailable(status)
+            return
+
+        c = self._hedge_connector()  # already verified non-None by _hedge_status
+
+        # Auto-release a stale in-flight latch (e.g., if a fail event was
+        # missed). Without this, one rejected order disables hedging forever.
+        now_ts = time.time()
+        if (self._hedge_in_flight and self._hedge_in_flight_ts > 0
+                and now_ts - self._hedge_in_flight_ts
+                    > self.config.hedge_in_flight_timeout_sec):
+            self._pair_logger.warning(
+                f"Hedge in-flight latch timed out after "
+                f"{self.config.hedge_in_flight_timeout_sec}s — releasing")
+            self._hedge_in_flight = False
+            self._hedge_in_flight_ts = 0.0
+            self._hedge_order_ids.clear()
+        if self._hedge_in_flight:
+            return
+
+        # Set leverage once after connector is ready
+        if not self._hedge_leverage_set:
+            try:
+                c.set_leverage(self.config.hedge_trading_pair,
+                               self.config.hedge_leverage)
+                self._hedge_leverage_set = True
+                self._pair_logger.info(
+                    f"Hedge leverage set to {self.config.hedge_leverage}x on "
+                    f"{self.config.hedge_trading_pair}")
+            except Exception as e:
+                self._pair_logger.warning(f"set_leverage failed (will retry): {e}")
+                # don't block hedging if exchange already has the right leverage
+                self._hedge_leverage_set = True
+
+        # Debounce: don't toggle open/close too rapidly
+        if (self._hedge_last_state_change_ts > 0
+                and now_ts - self._hedge_last_state_change_ts
+                    < self.config.hedge_min_state_change_interval_sec):
+            return
+
+        hedge_mid = self._hedge_book_mid()
+        if hedge_mid is None:
+            return
+
+        toxicity = self._get_toxicity_profile()
+        inventory = self._inventory_adjustments()
+        inv_side = inventory["accumulation_side"]
+
+        # Concentration-scaled gates (see docs §1, §8): both must pass.
+        skew = inventory["skew"]
+        abs_skew = abs(skew)
+        skew_thresh = self._hedge_inventory_skew_threshold()
+        tox_thresh = self._hedge_toxicity_threshold()
+
+        # No open hedge: maybe open one
+        if self._hedge_book.size <= ZERO:
+            spot_mid = self._get_book_mid()
+            if spot_mid is None or spot_mid <= ZERO:
+                return  # cannot size a hedge against an unknown spot
+            real_base, real_quote = self.balance_gate.get_real_balances()
+
+            # Spot SHORT (inv_side="buy" = skew<0) → LONG hedge to protect
+            # against price rising while we still owe base.
+            # Toxicity gate: SELL ratio high = our asks getting hit = market
+            # is buying aggressively from us, which is exactly the flow that
+            # drove us short. High sell_ratio → expect price to keep rising.
+            if (inv_side == "buy" and abs_skew >= skew_thresh
+                    and toxicity["sell_ratio"] >= tox_thresh):
+                # Size against the value of remaining base inventory
+                size_quote = real_base * spot_mid * self.config.hedge_size_cap_pct
+                if size_quote >= self.config.hedge_min_notional_quote:
+                    size = self._quantize_amount(c, self.config.hedge_trading_pair,
+                                                 size_quote / hedge_mid)
+                    if size > ZERO:
+                        self._pair_logger.info(
+                            f"Hedge gate met: skew={skew:+.3f} "
+                            f"(thresh ±{float(skew_thresh):.3f}), "
+                            f"sell_ratio={float(toxicity['sell_ratio']):.2f} "
+                            f"(thresh ≥{float(tox_thresh):.2f})")
+                        self._open_hedge("long", size)
+                return
+
+            # Spot LONG (inv_side="sell" = skew>0) → SHORT hedge to protect
+            # against price dropping while we hold extra base.
+            # Toxicity gate: BUY ratio high = our bids getting hit = market
+            # is selling aggressively to us, which drove us long. High
+            # buy_ratio → expect price to keep dropping.
+            if (inv_side == "sell" and abs_skew >= skew_thresh
+                    and toxicity["buy_ratio"] >= tox_thresh):
+                size_quote = real_quote * self.config.hedge_size_cap_pct
+                if size_quote >= self.config.hedge_min_notional_quote:
+                    size = self._quantize_amount(c, self.config.hedge_trading_pair,
+                                                 size_quote / hedge_mid)
+                    if size > ZERO:
+                        self._pair_logger.info(
+                            f"Hedge gate met: skew={skew:+.3f} "
+                            f"(thresh ±{float(skew_thresh):.3f}), "
+                            f"buy_ratio={float(toxicity['buy_ratio']):.2f} "
+                            f"(thresh ≥{float(tox_thresh):.2f})")
+                        self._open_hedge("short", size)
+                return
+            return
+
+        # Open hedge exists: maybe close it.
+        # Close when: skew falls below half the open threshold (hysteresis to
+        # avoid oscillation), OR the spot side flips from what we hedged.
+        close_skew_thresh = skew_thresh / D(2)
+        should_close = (
+            abs_skew < close_skew_thresh
+            or (self._hedge_book.side == "long" and inv_side != "buy")
+            or (self._hedge_book.side == "short" and inv_side != "sell")
+        )
+        if should_close:
+            self._close_hedge()
+
+    def _place_hedge_market(self, direction: str, size: Decimal,
+                            position_action: PositionAction, label: str):
+        """Common entry point for opening/closing a hedge market order.
+        Sets the in-flight latch + timestamp; routes to buy/sell."""
+        pair = self.config.hedge_trading_pair
+        try:
+            self._hedge_in_flight = True
+            self._hedge_in_flight_ts = time.time()
+            if direction == "short":
+                oid = self.sell(self.config.hedge_exchange, pair, size,
+                                OrderType.MARKET, Decimal("0"),
+                                position_action=position_action)
+            else:
+                oid = self.buy(self.config.hedge_exchange, pair, size,
+                               OrderType.MARKET, Decimal("0"),
+                               position_action=position_action)
+            if oid:
+                self._hedge_order_ids.add(oid)
+                self._hedge_last_state_change_ts = time.time()
+            else:
+                # No order id returned — release latch immediately
+                self._hedge_in_flight = False
+                self._hedge_in_flight_ts = 0.0
+            self._pair_logger.info(
+                f"Hedge {label} {direction.upper()} {size} {pair} (market, "
+                f"{position_action.value}) order_id={oid}")
+        except Exception as e:
+            self._pair_logger.error(
+                f"Failed to {label.lower()} hedge: {e}", exc_info=True)
+            self._hedge_in_flight = False
+            self._hedge_in_flight_ts = 0.0
+
+    def _open_hedge(self, direction: str, size: Decimal):
+        self._place_hedge_market(direction, size, PositionAction.OPEN, "OPEN")
+
+    def _close_hedge(self):
+        if self._hedge_book.size <= ZERO or self._hedge_book.side is None:
+            return
+        c = self._hedge_connector()
+        pair = self.config.hedge_trading_pair
+        size = self._quantize_amount(c, pair, self._hedge_book.size)
+        if size <= ZERO:
+            return  # rounded to zero — leave residual for next tick
+        # To close: opposite side market order
+        close_dir = "long" if self._hedge_book.side == "short" else "short"
+        self._place_hedge_market(
+            close_dir, size, PositionAction.CLOSE,
+            f"CLOSE-{self._hedge_book.side.upper()}")
+
+    def _process_hedge_fill(self, event: OrderFilledEvent):
+        """Apply a hedge fill to the hedge avg-cost book. Latch released last
+        so concurrent ticks can't fire a duplicate before state is committed."""
+        amount = self._to_decimal(event.amount)
+        price = self._to_decimal(event.price)
+        fee = self._fee_quote_equivalent(event)
+        side = "long" if event.trade_type == TradeType.BUY else "short"
+        self._hedge_book.apply_fill(side, amount, price, fee)
+        self._hedge_fills += 1
+        # Release latch only after all state mutations are committed
+        self._hedge_in_flight = False
+        self._hedge_in_flight_ts = 0.0
+        self._hedge_order_ids.discard(getattr(event, "order_id", None))
+
     # ---- Fill handling ----------------------------------------------------
 
     def did_fill_order(self, event: OrderFilledEvent):
-        if event.trade_type == TradeType.SELL:
-            self._base_flow -= event.amount
-            self._quote_flow += event.price * event.amount
-        else:
-            self._base_flow += event.amount
-            self._quote_flow -= event.price * event.amount
+        # Route hedge fills to the hedge tracker; they don't touch spot P&L.
+        is_hedge = (
+            self.config.enable_hedge
+            and (
+                getattr(event, "trading_pair", None) == self.config.hedge_trading_pair
+                or getattr(event, "order_id", None) in self._hedge_order_ids
+            )
+        )
+        if is_hedge:
+            self._hedge_order_ids.discard(getattr(event, "order_id", None))
+            self._process_hedge_fill(event)
+            self._save_state()
+            self._pair_logger.info(
+                f"Hedge FILL {event.trade_type.name} {event.amount} @ {event.price} | "
+                f"hedge pos: {self._hedge_book.side or 'flat'} {self._hedge_book.size} @ "
+                f"{self._hedge_book.avg_cost:.6f} | hedge realized: {self._hedge_book.realized_pnl:+.4f}"
+            )
+            return
 
-        self.pool.update_on_fill(event.trade_type, event.amount)
+        amount = self._to_decimal(event.amount)
+        price = self._to_decimal(event.price)
+        fee_quote = self._fee_quote_equivalent(event)
+
+        if event.trade_type == TradeType.SELL:
+            self._base_flow -= amount
+            self._quote_flow += price * amount
+        else:
+            self._base_flow += amount
+            self._quote_flow -= price * amount
+
+        # Realized/unrealized P&L tracking via FIFO lots
+        self._process_fill_for_pnl(event.trade_type, amount, price, fee_quote)
+
+        self.pool.update_on_fill(event.trade_type, amount)
 
         self._queue_flair_markout(event)
+        self._queue_adverse_markout(event)
+        self._fills_since_reposition += 1
         now_fill = time.time()
         self._last_fill_ts = now_fill
         self._toxicity_recent_fills.append((now_fill, event.trade_type))
@@ -1622,18 +2256,72 @@ class DeltaDefiCLAMM(StrategyV2Base):
 
         self._save_state()
 
-        pnl = self._get_pnl()
-        pnl_str = f"{pnl:+.4f}" if pnl is not None else "n/a"
+        pnl = self._get_pnl_breakdown()
+        spread_str = f"{pnl['spread_capture']:+.4f}"
+        fees_str = f"{pnl['fees']:.4f}"
+        lvr_str = f"{pnl['lvr_estimate']:.4f}"
+        hedge_str = f"{pnl['hedge_pnl']:+.4f}"
+        net_str = f"{pnl['total_net']:+.4f}"
+        pos_str = (f"{pnl['spot_position']:+.2f}@{pnl['spot_avg_cost']:.6f}"
+                   if pnl['spot_position'] != ZERO else "flat")
+
         pool_price = self.pool.get_pool_price()
         pp_str = f"{pool_price:.6f}" if pool_price else "n/a"
+
+        # Zone label: compare fill distance from mid to inner spread threshold
+        w = self.config.pool_price_weight
+        pool_mid = self.pool.get_mid_price()
+        blended_mid = (D(1) - w) * self.pool.anchor_price + w * pool_mid
+        inner_spread = self.config.base_spread_bps / D("10000")
+        fill_dist = abs(price - blended_mid) / blended_mid if blended_mid > ZERO else ZERO
+        zone = "outer" if fill_dist > inner_spread * D("1.5") else "inner"
+
+        toxicity = self._get_toxicity_profile()
+        inventory = self._inventory_adjustments()
+        flair = self._flair_summary()
+
+        def _st(state):
+            if state >= D(2): return "hard"
+            if state >= D(1): return "soft"
+            return "off"
+
+        inv_side = inventory["accumulation_side"] or "none"
         msg = (
-            f"CL-AMM {event.trade_type.name} {event.amount:.4f} @ {event.price:.6f} | "
-            f"P&L: {pnl_str} | pool: {pp_str} | range: [{self.pool.p_lower:.6f}, {self.pool.p_upper:.6f}]"
+            f"CL-AMM {event.trade_type.name} {amount:.4f} @ {price:.6f} [{zone}] | "
+            f"P&L: spread={spread_str} - fees={fees_str} + hedge={hedge_str} "
+            f"= net={net_str} | "
+            f"pos: {pos_str} | pool: {pp_str} | "
+            f"range: [{self.pool.p_lower:.6f}, {self.pool.p_upper:.6f}] ({self.pool.concentration_pct:.1f}%) | "
+            f"inv: {inventory['skew']:+.2f} {_st(inventory['state'])} {inv_side} | "
+            f"tox: buy={_st(toxicity['buy_state'])}({toxicity['buy_ratio']:.2f}) "
+            f"sell={_st(toxicity['sell_state'])}({toxicity['sell_ratio']:.2f}) | "
+            f"FLAIR(ref): lvr~{lvr_str} roll_net={flair['roll_net']:+.4f} | "
+            f"adv: {self._adverse_summary_str()}"
         )
         self.log_with_clock(logging.INFO, msg)
         self.notify_hb_app_with_timestamp(msg)
 
         safe_ensure_future(self._refresh_after_fill())
+
+    def did_fail_order(self, event: MarketOrderFailureEvent):
+        """Release the hedge in-flight latch if the failed order was a hedge order."""
+        oid = getattr(event, "order_id", None)
+        if oid in self._hedge_order_ids:
+            self._hedge_order_ids.discard(oid)
+            self._hedge_in_flight = False
+            self._hedge_in_flight_ts = 0.0
+            self._pair_logger.warning(
+                f"Hedge order failed (order_id={oid}) — latch released")
+
+    def did_cancel_order(self, event: OrderCancelledEvent):
+        """Release the hedge in-flight latch if a hedge order was cancelled."""
+        oid = getattr(event, "order_id", None)
+        if oid in self._hedge_order_ids:
+            self._hedge_order_ids.discard(oid)
+            self._hedge_in_flight = False
+            self._hedge_in_flight_ts = 0.0
+            self._pair_logger.warning(
+                f"Hedge order cancelled (order_id={oid}) — latch released")
 
     async def _refresh_after_fill(self):
         if self._refreshing:
@@ -1677,11 +2365,63 @@ class DeltaDefiCLAMM(StrategyV2Base):
 
     # ---- P&L --------------------------------------------------------------
 
-    def _get_pnl(self) -> Optional[Decimal]:
+    def _process_fill_for_pnl(self, side: TradeType, size: Decimal,
+                              price: Decimal, fee_quote: Decimal):
+        """Apply a spot fill to the spot avg-cost book."""
+        side_str = "long" if side == TradeType.BUY else "short"
+        self._spot_book.apply_fill(side_str, size, price, fee_quote)
+
+    def _get_pnl_breakdown(self) -> Dict[str, Optional[Decimal]]:
+        """Cash decomposition of total P&L (inventory mark excluded).
+
+            total_net = spread_capture - fees + hedge_pnl
+
+        spread_capture : realized P&L from closed spot round-trips
+        fees           : actual spot exchange fees paid (cumulative)
+        hedge_pnl      : realized + unrealized of futures hedge book,
+                         net of hedge fees
+
+        inventory_pnl is also returned for visibility, but it is NOT in
+        total_net — open spot inventory mark-to-market is treated as
+        unrealized exposure to ignore until the position is closed.
+
+        lvr_estimate is an INDEPENDENT microstructure metric from FLAIR
+        (oracle-markout adverse selection). Not a component of total_net.
+        """
+        sb, hb = self._spot_book, self._hedge_book
+
         book_mid = self._get_book_mid()
-        if book_mid is None or book_mid <= ZERO:
-            return None
-        return self._base_flow * book_mid + self._quote_flow
+        inventory_pnl = sb.unrealized(book_mid)  # informational only
+        spot_pos = sb.signed_position()
+
+        hedge_mid = self._hedge_book_mid()
+        hedge_unreal = hb.unrealized(hedge_mid)
+        hedge_pos = hb.signed_position()
+        hedge_net = hb.realized_pnl - hb.fees
+        if hedge_unreal is not None:
+            hedge_net += hedge_unreal
+
+        total_net = sb.realized_pnl - sb.fees + hedge_net
+
+        return {
+            "spread_capture": sb.realized_pnl,
+            "fees": sb.fees,
+            "inventory_pnl": inventory_pnl,
+            "hedge_pnl": hedge_net,
+            "total_net": total_net,
+            "lvr_estimate": self._flair_lifetime_lvr,
+            "spot_position": spot_pos,
+            "spot_avg_cost": sb.avg_cost,
+            "hedge_realized": hb.realized_pnl,
+            "hedge_unrealized": hedge_unreal,
+            "hedge_fees": hb.fees,
+            "hedge_position": hedge_pos,
+            "hedge_avg_cost": hb.avg_cost,
+        }
+
+    def _get_pnl(self) -> Optional[Decimal]:
+        """Backwards-compat shim for total net P&L."""
+        return self._get_pnl_breakdown()["total_net"]
 
     # ---- Market data helpers ----------------------------------------------
 
@@ -1772,6 +2512,9 @@ class DeltaDefiCLAMM(StrategyV2Base):
         state = self.pool.to_state()
         state["base_flow"] = str(self._base_flow)
         state["quote_flow"] = str(self._quote_flow)
+        state.update(self._spot_book.to_dict(prefix="spot_"))
+        state.update(self._hedge_book.to_dict(prefix="hedge_"))
+        state["hedge_fills"] = self._hedge_fills
         with open(self._state_file, "w") as f:
             json.dump(state, f, indent=2)
 
@@ -1807,8 +2550,17 @@ class DeltaDefiCLAMM(StrategyV2Base):
         base_token, quote_token = self.config.trading_pair.split("-")
         total_capital = real_base * blended_mid + real_quote
 
-        pnl = self._get_pnl()
-        pnl_str = f"{pnl:+.4f}" if pnl is not None else "n/a"
+        pnl = self._get_pnl_breakdown()
+        pnl_spread_str = f"{pnl['spread_capture']:+.4f}"
+        pnl_fees_str = f"{pnl['fees']:.4f}"
+        pnl_lvr_str = f"{pnl['lvr_estimate']:.4f}"
+        pnl_hedge_str = f"{pnl['hedge_pnl']:+.4f}"
+        pnl_net_str = f"{pnl['total_net']:+.4f}"
+        pnl_pos_str = (f"{pnl['spot_position']:+.2f} @ {pnl['spot_avg_cost']:.6f}"
+                       if pnl['spot_position'] != ZERO else "flat")
+        hedge_pos_str = (
+            f"{pnl['hedge_position']:+.2f} @ {pnl['hedge_avg_cost']:.6f}"
+            if pnl['hedge_position'] != ZERO else "flat")
 
         max_safe_str = f"{self._last_max_safe:.1f}" if self._last_max_safe > ZERO else "n/a"
         order_base = self._last_max_safe * self.config.order_safe_ratio if self._last_max_safe > ZERO else ZERO
@@ -1864,6 +2616,12 @@ class DeltaDefiCLAMM(StrategyV2Base):
             f"(+-{self.pool.concentration_pct:.2f}%) | L: {self.pool.L:.0f}"
             f" | drift: {self._get_anchor_drift_pct():.2f}%"
             f" (soft@{self.config.soft_recenter_drift_pct}%)",
+            f"  Zones: inner {(D(1)-self.config.outer_capital_fraction)*100:.0f}% "
+            f"({self.config.base_spread_bps:.0f}bps) | "
+            f"outer {self.config.outer_capital_fraction*100:.0f}% "
+            f"({self.config.base_spread_bps*self.config.outer_spread_mult:.0f}bps) | "
+            f"trigger: {self._outer_trigger_pct()*100:.1f}% from center",
+            f"  Adverse selection (avg move post-fill): {self._adverse_status_lines()}",
             f"  VPool: {base_pct:.1f}%B / {quote_pct:.1f}%Q | Skew: {skew:+.3f}",
             f"  Real: {real_base:.2f} {base_token} / {real_quote:.2f} {quote_token}"
             f" | Capital: {total_capital:.1f} {quote_token}",
@@ -1883,8 +2641,17 @@ class DeltaDefiCLAMM(StrategyV2Base):
             f"net={flair['lifetime_net']:+.4f} | ratio={flair['lifetime_ratio']:.2f}x",
             f"  Rebalance: {'enabled' if self.config.enable_rebalance else 'disabled'}"
             f"{' | last: ' + self._last_rebalance_action if self._last_rebalance_action else ''}",
-            f"  P&L: {pnl_str} {quote_token} (limit: -{self.config.max_cumulative_loss})",
+            f"  P&L: net={pnl_net_str} {quote_token} | spread={pnl_spread_str} "
+            f"- fees={pnl_fees_str} + hedge={pnl_hedge_str} "
+            f"(limit -{self.config.max_cumulative_loss})",
+            f"  LVR estimate (FLAIR ref, not in net): {pnl_lvr_str}",
+            f"  Spot:  {pnl_pos_str}  |  Hedge: {hedge_pos_str}"
+            f"{' (' + self.config.hedge_trading_pair + ' on ' + self.config.hedge_exchange + ')' if self.config.enable_hedge else ' (disabled)'}",
         ]
+        if self.config.enable_hedge:
+            ready, status = self._hedge_status()
+            ready_mark = "✓" if ready else "✗"
+            lines.append(f"  Hedge subsystem: {ready_mark} {status}")
 
         if self._stopped:
             lines.append("  *** STOPPED - loss limit exceeded ***")
