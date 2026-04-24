@@ -206,7 +206,12 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
 
     # Outer range architecture (inner/outer zone split)
     outer_capital_fraction: Decimal = Field(D("0.30"))
-    outer_spread_mult: Decimal = Field(D("2.5"))
+    outer_spread_mult: Decimal = Field(D("2.5"))     # floor: outer ≥ this × inner
+    # Primary outer spread: outer order sits at this fraction of the range
+    # half-width. e.g. 0.60 with concentration=5% → outer at 3% from mid.
+    # Auto-scales with concentration so outer wings always sit in the outer
+    # portion of the active range, not bunched against inner.
+    outer_spread_pct_of_range: Decimal = Field(D("0.60"))
     outer_range_mult: Decimal = Field(D("2.5"))
     outer_recenter_trigger_pct: Decimal = Field(D("0.50"))
 
@@ -1341,7 +1346,13 @@ class DeltaDefiCLAMM(StrategyV2Base):
             mid_price, inner_spread, inner_value, toxicity, inventory,
             momentum_bid_extra, momentum_ask_extra, connector, pair, outer_zone=False)
 
-        outer_spread = inner_spread * self.config.outer_spread_mult
+        # Outer spread: prefer "fraction of range half-width" (auto-scales with
+        # concentration), with a floor at outer_spread_mult × inner_spread so
+        # very tight ranges still leave a sensible inner/outer gap.
+        outer_from_range = (self.pool.concentration_pct / D(100)
+                            * self.config.outer_spread_pct_of_range)
+        outer_from_mult = inner_spread * self.config.outer_spread_mult
+        outer_spread = max(outer_from_range, outer_from_mult)
         outer_value = order_value * self.config.outer_capital_fraction
         orders += self._make_order_pair(
             mid_price, outer_spread, outer_value, toxicity, inventory,
@@ -2616,11 +2627,14 @@ class DeltaDefiCLAMM(StrategyV2Base):
             f"(+-{self.pool.concentration_pct:.2f}%) | L: {self.pool.L:.0f}"
             f" | drift: {self._get_anchor_drift_pct():.2f}%"
             f" (soft@{self.config.soft_recenter_drift_pct}%)",
+            # Compute the actual outer spread being used right now (max of
+            # range-fraction and floor multiplier).
             f"  Zones: inner {(D(1)-self.config.outer_capital_fraction)*100:.0f}% "
-            f"({self.config.base_spread_bps:.0f}bps) | "
+            f"@ ±{float(self.config.base_spread_bps)/100:.2f}% | "
             f"outer {self.config.outer_capital_fraction*100:.0f}% "
-            f"({self.config.base_spread_bps*self.config.outer_spread_mult:.0f}bps) | "
-            f"trigger: {self._outer_trigger_pct()*100:.1f}% from center",
+            f"@ ±{float(max(self.pool.concentration_pct/D(100)*self.config.outer_spread_pct_of_range, self.config.base_spread_bps/D('10000')*self.config.outer_spread_mult))*100:.2f}% | "
+            f"range ±{float(self.pool.concentration_pct):.1f}% | "
+            f"recenter trig: {self._outer_trigger_pct()*100:.1f}%",
             f"  Adverse selection (avg move post-fill): {self._adverse_status_lines()}",
             f"  VPool: {base_pct:.1f}%B / {quote_pct:.1f}%Q | Skew: {skew:+.3f}",
             f"  Real: {real_base:.2f} {base_token} / {real_quote:.2f} {quote_token}"
