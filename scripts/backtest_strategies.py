@@ -160,20 +160,16 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         self.spread_bps = D(str(config.get("spread_bps", "40")))
         self.pool_price_weight = D(str(config.get("pool_price_weight", "0.70")))
         self.anchor_ema_alpha = D(str(config.get("anchor_ema_alpha", "0.05")))
-        self.num_levels = int(config.get("num_levels", 1))
-        self.size_decay = D(str(config.get("size_decay", "0.85")))
-        self.spread_multiplier = D(str(config.get("spread_multiplier", "1.5")))
         self.order_safe_ratio = D(str(config.get("order_safe_ratio", "0.5")))
         self.pool_depth_override = config.get("pool_depth")
         self.enable_asymmetric_spread = config.get(
             "enable_asymmetric_spread", True)
         self.skew_sensitivity = D(str(config.get("skew_sensitivity", "0.5")))
         self.min_spread_bps = D(str(config.get("min_spread_bps", "20")))
-        self.soft_recenter_drift_pct = D(str(
-            config.get("soft_recenter_drift_pct", "2.0")))
 
         # Fill-toxicity guard (widen + shrink on toxic side)
         self.toxicity_window_sec = int(config.get("toxicity_window_sec", 300))
+        self.toxicity_window_fills = int(config.get("toxicity_window_fills", 20))
         self.toxicity_activation_count = int(config.get("toxicity_activation_count", 8))
         self.toxicity_buy_ratio_soft = D(str(config.get("toxicity_buy_ratio_soft", "0.65")))
         self.toxicity_buy_ratio_hard = D(str(config.get("toxicity_buy_ratio_hard", "0.80")))
@@ -193,6 +189,20 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         self.inventory_hard_spread_mult = D(str(config.get("inventory_hard_spread_mult", "1.80")))
         self.inventory_hard_disable_accumulation_side = bool(
             config.get("inventory_hard_disable_accumulation_side", True))
+
+        # Outer range architecture
+        self.outer_capital_fraction = D(str(config.get("outer_capital_fraction", "0.30")))
+        self.outer_spread_mult = D(str(config.get("outer_spread_mult", "2.5")))
+        self.outer_range_mult = D(str(config.get("outer_range_mult", "2.5")))
+        self.outer_recenter_trigger_pct = D(str(config.get("outer_recenter_trigger_pct", "0.50")))
+        # Mock hedge (futures overlay)
+        self.enable_hedge = bool(config.get("enable_hedge", False))
+        self.hedge_size_cap_pct = D(str(config.get("hedge_size_cap_pct", "0.30")))
+        self.hedge_taker_fee_bps = D(str(config.get("hedge_taker_fee_bps", "5")))
+        self.hedge_funding_rate_per_hr = D(str(config.get("hedge_funding_rate_per_hr", "0.0001")))
+
+        # HMM v2 options
+        self.hmm_use_fill_asymmetry = bool(config.get("hmm_use_fill_asymmetry", False))
 
         # FLAIR / LVR monitoring
         self.enable_flair_monitor = bool(config.get("enable_flair_monitor", True))
@@ -267,12 +277,19 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         self._recentered_this_candle = False
         self._range_changed_this_candle = False
         self._recenter_count = 0
+        self._outer_trigger_count: int = 0
+        self._hedge_position: Optional[dict] = None
+        self._hedge_pnl: Decimal = ZERO
+        self._hedge_fills: int = 0
         self._range_change_count = 0
         self._trend_halted_this_candle = False
         self._trend_order_scale = 1.0
         self._trend_halted_count = 0
         self._toxicity_recent_fills: deque = deque(maxlen=2000)
         self._current_sim_time: float = 0.0
+        self._last_fill_sim_time: float = 0.0
+        self._last_autocorr: Optional[float] = None
+        self._last_vol_ratio: Optional[float] = None
         self._flair_pending: deque = deque(maxlen=50000)
         self._flair_events: deque = deque(maxlen=100000)
         self._flair_roll_fee = ZERO
@@ -329,22 +346,17 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         # Update anchor EMA
         self._update_anchor(price)
 
-        # Hard recenter: price exits range bounds
-        if not self.pool.is_in_range(price):
-            self.pool.recenter(price)
-            self._recentered_this_candle = True
-            self._recenter_count += 1
-
-        # Soft recenter: anchor drifted from range center
-        elif self.soft_recenter_drift_pct > ZERO:
-            range_center = (self.pool.p_lower + self.pool.p_upper) / D(2)
-            if range_center > ZERO:
-                drift_pct = (abs(self.pool.anchor_price - range_center)
-                             / range_center * D(100))
-                if drift_pct >= self.soft_recenter_drift_pct:
-                    self.pool.recenter(self.pool.anchor_price)
-                    self._recentered_this_candle = True
-                    self._recenter_count += 1
+        # Outer wing trigger: fire when price drifts past outer zone from the pool center
+        # pool_center is the static midpoint set at last recenter — not the anchor EMA
+        outer_trig = self._outer_trigger_pct()
+        pool_center = (self.pool.p_lower + self.pool.p_upper) / D("2")
+        if pool_center > ZERO:
+            price_drift = abs(price - pool_center) / pool_center
+            if price_drift >= outer_trig or not self.pool.is_in_range(price):
+                self.pool.recenter(price)
+                self._recentered_this_candle = True
+                self._recenter_count += 1
+                self._outer_trigger_count += 1
 
         # Update indicators and dynamic range
         self._update_indicators(history)
@@ -356,10 +368,13 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         mid = (D(1) - w) * self.pool.anchor_price + w * pool_mid
 
         # Generate orders
-        return self._generate_orders(mid)
+        orders = self._generate_orders(mid)
+        self._check_and_update_hedge(price, sim_time)
+        return orders
 
     def on_fill(self, side: str, price: Decimal, amount: Decimal,
                 sim_time: float):
+        self._last_fill_sim_time = sim_time
         self._toxicity_recent_fills.append((sim_time, TradeType.SELL if side == "sell" else TradeType.BUY))
         self._queue_flair_markout(side, price, amount, sim_time)
         trade_type = TradeType.SELL if side == "sell" else TradeType.BUY
@@ -407,6 +422,12 @@ class CLAMMBacktestStrategy(BacktestStrategy):
             "toxicity_samples": float(self._get_toxicity_profile()["sample_count"]),
             "toxicity_buy_ratio": float(self._get_toxicity_profile()["buy_ratio"]),
             "toxicity_sell_ratio": float(self._get_toxicity_profile()["sell_ratio"]),
+            "fill_asymmetry_staleness_sec": (
+                self._current_sim_time - self._last_fill_sim_time
+                if self._last_fill_sim_time > 0 else -1.0
+            ),
+            "autocorr_lag1": self._last_autocorr if self._last_autocorr is not None else 0.0,
+            "vol_ratio": self._last_vol_ratio if self._last_vol_ratio is not None else 1.0,
             "flair_roll_fee": float(flair["roll_fee"]),
             "flair_roll_lvr": float(flair["roll_lvr"]),
             "flair_roll_net": float(flair["roll_net"]),
@@ -417,10 +438,23 @@ class CLAMMBacktestStrategy(BacktestStrategy):
             "flair_lifetime_ratio": float(flair["lifetime_ratio"]),
             "flair_pending": float(flair["pending"]),
             "flair_samples": float(flair["samples"]),
+            "outer_trigger_count": self._outer_trigger_count,
+            "hedge_pnl": float(self._hedge_pnl),
+            "hedge_fills": self._hedge_fills,
+            "hedge_active": 1 if self._hedge_position is not None else 0,
+            "hedge_direction": self._hedge_position["direction"] if self._hedge_position else "none",
         }
 
     def get_portfolio_value(self, price: Decimal) -> Decimal:
-        return self.base_balance * price + self.quote_balance
+        base_val = self.base_balance * price + self.quote_balance
+        hedge_unrealized = ZERO
+        if self._hedge_position is not None:
+            pos = self._hedge_position
+            if pos["direction"] == "short":
+                hedge_unrealized = pos["size"] * (pos["entry_price"] - price)
+            else:
+                hedge_unrealized = pos["size"] * (price - pos["entry_price"])
+        return base_val + self._hedge_pnl + hedge_unrealized
 
     # -- Internal methods --
 
@@ -436,7 +470,15 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         self._last_natr = self._natr.compute(history)
         self._last_adx = self._adx.compute(history)
         self._last_hurst = self._hurst.compute(history)
-        self._last_hmm = self._hmm.predict(history)
+        self._last_autocorr = self._compute_autocorr_lag1(history)
+        self._last_vol_ratio = self._compute_vol_ratio(history)
+        fill_asym = None
+        if self.hmm_use_fill_asymmetry:
+            tox = self._get_toxicity_profile()
+            n = int(tox["sample_count"])
+            if n >= self.toxicity_activation_count:
+                fill_asym = float(tox["buy_ratio"])
+        self._last_hmm = self._hmm.predict(history, fill_asym)
 
     def _update_dynamic_range(self):
         new_pct = self._range_ctrl.compute_concentration_pct(
@@ -467,23 +509,19 @@ class CLAMMBacktestStrategy(BacktestStrategy):
     def _generate_orders(self, mid_price: Decimal) -> List[SimOrder]:
         orders: List[SimOrder] = []
 
-        # Trend protection
         decision = self._range_ctrl.last_decision
         eff_trend = decision.effective_trend if decision is not None else 0.0
-
         halt_thresh = float(self.trend_halt_threshold)
         if halt_thresh > 0 and eff_trend >= halt_thresh:
             self._trend_halted_this_candle = True
             self._trend_halted_count += 1
-            return orders  # empty
-
+            return orders
         scale_factor = float(self.trend_order_scale_factor)
         trend_scale = max(0.0, 1.0 - scale_factor * eff_trend)
         if trend_scale <= 0.0:
             self._trend_halted_this_candle = True
             self._trend_halted_count += 1
-            return orders  # empty
-
+            return orders
         self._trend_order_scale = trend_scale
 
         max_safe_base = self._max_safe_order_base()
@@ -492,101 +530,169 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         toxicity = self._get_toxicity_profile()
         inventory = self._inventory_adjustments()
 
-        weights = [self.size_decay ** i for i in range(self.num_levels)]
-        total_weight = sum(weights)
-        if total_weight <= ZERO:
-            return orders
+        # Inner zone: (1 - outer_capital_fraction) of order value, base spread
+        inner_value = order_value * (D(1) - self.outer_capital_fraction)
+        inner_spread = self.spread_bps / D("10000")
+        orders += self._make_order_pair(mid_price, inner_spread, inner_value,
+                                        toxicity, inventory, outer_zone=False)
 
-        for i in range(self.num_levels):
-            base_spread = (self.spread_bps * (self.spread_multiplier ** i)
-                           / D("10000"))
-            w = weights[i] / total_weight
-            layer_value = order_value * w
-
-            if self.enable_asymmetric_spread:
-                bid_spread, ask_spread = self._asymmetric_spreads(base_spread)
-            else:
-                bid_spread, ask_spread = base_spread, base_spread
-
-            if toxicity["buy_state"] >= D(2):
-                bid_spread *= self.toxicity_hard_spread_mult
-            elif toxicity["buy_state"] >= D(1):
-                bid_spread *= self.toxicity_soft_spread_mult
-            if toxicity["sell_state"] >= D(2):
-                ask_spread *= self.toxicity_hard_spread_mult
-            elif toxicity["sell_state"] >= D(1):
-                ask_spread *= self.toxicity_soft_spread_mult
-
-            if inventory["state"] >= D(2):
-                if inventory["accumulation_side"] == "buy":
-                    bid_spread *= self.inventory_hard_spread_mult
-                elif inventory["accumulation_side"] == "sell":
-                    ask_spread *= self.inventory_hard_spread_mult
-            elif inventory["state"] >= D(1):
-                if inventory["accumulation_side"] == "buy":
-                    bid_spread *= self.inventory_soft_spread_mult
-                elif inventory["accumulation_side"] == "sell":
-                    ask_spread *= self.inventory_soft_spread_mult
-
-            ask_price = mid_price * (D(1) + ask_spread)
-            bid_price = mid_price * (D(1) - bid_spread)
-
-            ask_size = layer_value / ask_price if ask_price > ZERO else ZERO
-            bid_size = layer_value / bid_price if bid_price > ZERO else ZERO
-
-            if toxicity["buy_state"] >= D(2):
-                bid_size *= self.toxicity_hard_size_mult
-            elif toxicity["buy_state"] >= D(1):
-                bid_size *= self.toxicity_soft_size_mult
-            if toxicity["sell_state"] >= D(2):
-                ask_size *= self.toxicity_hard_size_mult
-            elif toxicity["sell_state"] >= D(1):
-                ask_size *= self.toxicity_soft_size_mult
-
-            if inventory["state"] >= D(2):
-                if inventory["accumulation_side"] == "buy":
-                    if self.inventory_hard_disable_accumulation_side:
-                        bid_size = ZERO
-                    else:
-                        bid_size *= self.inventory_hard_size_mult
-                elif inventory["accumulation_side"] == "sell":
-                    if self.inventory_hard_disable_accumulation_side:
-                        ask_size = ZERO
-                    else:
-                        ask_size *= self.inventory_hard_size_mult
-            elif inventory["state"] >= D(1):
-                if inventory["accumulation_side"] == "buy":
-                    bid_size *= self.inventory_soft_size_mult
-                elif inventory["accumulation_side"] == "sell":
-                    ask_size *= self.inventory_soft_size_mult
-
-            # Cap by available balance
-            if ask_size > self.base_balance:
-                ask_size = self.base_balance
-            if bid_price > ZERO and bid_size * bid_price > self.quote_balance:
-                bid_size = self.quote_balance / bid_price
-
-            # Round to reasonable precision (no connector quantization)
-            ask_price = D(str(round(float(ask_price), 8)))
-            bid_price = D(str(round(float(bid_price), 8)))
-            ask_size = D(str(round(float(ask_size), 4)))
-            bid_size = D(str(round(float(bid_size), 4)))
-
-            if ask_size > ZERO:
-                orders.append(SimOrder("sell", ask_price, ask_size))
-            if bid_size > ZERO:
-                orders.append(SimOrder("buy", bid_price, bid_size))
-
+        # Outer zone: outer_capital_fraction of order value, wider spread
+        outer_value = order_value * self.outer_capital_fraction
+        outer_spread = inner_spread * self.outer_spread_mult
+        orders += self._make_order_pair(mid_price, outer_spread, outer_value,
+                                        toxicity, inventory, outer_zone=True)
         return orders
 
-    def _get_toxicity_profile(self) -> Dict[str, Decimal]:
-        now = self._current_sim_time
-        window = self.toxicity_window_sec
-        while self._toxicity_recent_fills and now - self._toxicity_recent_fills[0][0] > window:
-            self._toxicity_recent_fills.popleft()
+    def _make_order_pair(self, mid_price: Decimal, base_spread: Decimal,
+                         total_value: Decimal, toxicity: dict, inventory: dict,
+                         outer_zone: bool = False) -> List[SimOrder]:
+        if self.enable_asymmetric_spread:
+            bid_spread, ask_spread = self._asymmetric_spreads(base_spread)
+        else:
+            bid_spread, ask_spread = base_spread, base_spread
 
-        buy_count = sum(1 for _, t in self._toxicity_recent_fills if t == TradeType.BUY)
-        sell_count = sum(1 for _, t in self._toxicity_recent_fills if t == TradeType.SELL)
+        if toxicity["buy_state"] >= D(2):
+            bid_spread *= self.toxicity_hard_spread_mult
+        elif toxicity["buy_state"] >= D(1):
+            bid_spread *= self.toxicity_soft_spread_mult
+        if toxicity["sell_state"] >= D(2):
+            ask_spread *= self.toxicity_hard_spread_mult
+        elif toxicity["sell_state"] >= D(1):
+            ask_spread *= self.toxicity_soft_spread_mult
+
+        if inventory["state"] >= D(2):
+            if inventory["accumulation_side"] == "buy":
+                bid_spread *= self.inventory_hard_spread_mult
+            elif inventory["accumulation_side"] == "sell":
+                ask_spread *= self.inventory_hard_spread_mult
+        elif inventory["state"] >= D(1):
+            if inventory["accumulation_side"] == "buy":
+                bid_spread *= self.inventory_soft_spread_mult
+            elif inventory["accumulation_side"] == "sell":
+                ask_spread *= self.inventory_soft_spread_mult
+
+        ask_price = mid_price * (D(1) + ask_spread)
+        bid_price = mid_price * (D(1) - bid_spread)
+
+        ask_size = total_value / ask_price if ask_price > ZERO else ZERO
+        bid_size = total_value / bid_price if bid_price > ZERO else ZERO
+
+        if toxicity["buy_state"] >= D(2):
+            bid_size *= self.toxicity_hard_size_mult
+        elif toxicity["buy_state"] >= D(1):
+            bid_size *= self.toxicity_soft_size_mult
+        if toxicity["sell_state"] >= D(2):
+            ask_size *= self.toxicity_hard_size_mult
+        elif toxicity["sell_state"] >= D(1):
+            ask_size *= self.toxicity_soft_size_mult
+
+        if inventory["state"] >= D(2):
+            if inventory["accumulation_side"] == "buy":
+                if self.inventory_hard_disable_accumulation_side:
+                    bid_size = ZERO
+                else:
+                    bid_size *= self.inventory_hard_size_mult
+            elif inventory["accumulation_side"] == "sell":
+                if self.inventory_hard_disable_accumulation_side:
+                    ask_size = ZERO
+                else:
+                    ask_size *= self.inventory_hard_size_mult
+        elif inventory["state"] >= D(1):
+            if inventory["accumulation_side"] == "buy":
+                bid_size *= self.inventory_soft_size_mult
+            elif inventory["accumulation_side"] == "sell":
+                ask_size *= self.inventory_soft_size_mult
+
+        bal_frac = self.outer_capital_fraction if outer_zone else (D(1) - self.outer_capital_fraction)
+        max_ask = self.base_balance * bal_frac
+        max_bid_quote = self.quote_balance * bal_frac
+        if ask_size > max_ask:
+            ask_size = max_ask
+        if bid_price > ZERO and bid_size * bid_price > max_bid_quote:
+            bid_size = max_bid_quote / bid_price
+
+        ask_price = D(str(round(float(ask_price), 8)))
+        bid_price = D(str(round(float(bid_price), 8)))
+        ask_size = D(str(round(float(ask_size), 4)))
+        bid_size = D(str(round(float(bid_size), 4)))
+
+        result = []
+        if ask_size > ZERO:
+            result.append(SimOrder("sell", ask_price, ask_size))
+        if bid_size > ZERO:
+            result.append(SimOrder("buy", bid_price, bid_size))
+        return result
+
+    def _outer_trigger_pct(self) -> float:
+        """Fraction of anchor price at which outer wing triggers repositioning.
+
+        inner_half = concentration_pct (e.g. 5 → 0.05 = ±5% from anchor)
+        outer_half = inner_half × outer_range_mult (e.g. ×2.5 → ±12.5%)
+        trigger   = inner_half + wing_half × outer_recenter_trigger_pct
+        """
+        inner_half = float(self.pool.concentration_pct) / 100
+        outer_half = inner_half * float(self.outer_range_mult)
+        wing_half = outer_half - inner_half
+        return inner_half + wing_half * float(self.outer_recenter_trigger_pct)
+
+    def _check_and_update_hedge(self, price: Decimal, sim_time: float):
+        """Mock futures hedge: open/close short or long based on fill asymmetry + inventory."""
+        if not self.enable_hedge or price <= ZERO:
+            return
+        toxicity = self._get_toxicity_profile()
+        inventory = self._inventory_adjustments()
+        inv_state = inventory["state"]
+        inv_side = inventory["accumulation_side"]
+
+        if self._hedge_position is None:
+            # Open short: toxic buy flow + long inventory accumulation
+            if (inv_side == "buy" and inv_state >= D(1)
+                    and toxicity["buy_state"] >= D(2)):
+                size = self.base_balance * self.hedge_size_cap_pct
+                if size > ZERO:
+                    self._hedge_pnl -= size * price * self.hedge_taker_fee_bps / D("10000")
+                    self._hedge_position = {"direction": "short", "size": size,
+                                            "entry_price": price, "last_ts": sim_time}
+                    self._hedge_fills += 1
+            # Open long: toxic sell flow + short inventory accumulation
+            elif (inv_side == "sell" and inv_state >= D(1)
+                  and toxicity["sell_state"] >= D(2)):
+                size = (self.quote_balance / price) * self.hedge_size_cap_pct
+                if size > ZERO:
+                    self._hedge_pnl -= size * price * self.hedge_taker_fee_bps / D("10000")
+                    self._hedge_position = {"direction": "long", "size": size,
+                                            "entry_price": price, "last_ts": sim_time}
+                    self._hedge_fills += 1
+        else:
+            pos = self._hedge_position
+            # Funding cost per candle (1-minute interval)
+            dt_hr = D(str((sim_time - pos["last_ts"]) / 3600))
+            self._hedge_pnl -= pos["size"] * price * self.hedge_funding_rate_per_hr * dt_hr
+            pos["last_ts"] = sim_time
+
+            # Close when inventory normalizes or direction flips
+            should_close = (
+                inv_state < D(1)
+                or (pos["direction"] == "short" and inv_side != "buy")
+                or (pos["direction"] == "long" and inv_side != "sell")
+            )
+            if should_close:
+                if pos["direction"] == "short":
+                    close_pnl = pos["size"] * (pos["entry_price"] - price)
+                else:
+                    close_pnl = pos["size"] * (price - pos["entry_price"])
+                close_fee = pos["size"] * price * self.hedge_taker_fee_bps / D("10000")
+                self._hedge_pnl += close_pnl - close_fee
+                self._hedge_position = None
+                self._hedge_fills += 1
+
+    def _get_toxicity_profile(self) -> Dict[str, Decimal]:
+        # Fill-count window: use last N fills regardless of elapsed time
+        window_n = self.toxicity_window_fills
+        recent = list(self._toxicity_recent_fills)[-window_n:]
+
+        buy_count = sum(1 for _, t in recent if t == TradeType.BUY)
+        sell_count = sum(1 for _, t in recent if t == TradeType.SELL)
         total = buy_count + sell_count
         if total <= 0:
             return {
@@ -621,6 +727,44 @@ class CLAMMBacktestStrategy(BacktestStrategy):
             "buy_state": buy_state,
             "sell_state": sell_state,
         }
+
+    @staticmethod
+    def _compute_autocorr_lag1(candles) -> Optional[float]:
+        if len(candles) < 32:
+            return None
+        closes = [float(c.close) for c in candles[-31:]]
+        rets = []
+        for i in range(1, len(closes)):
+            prev = closes[i - 1]
+            rets.append((closes[i] / prev - 1.0) if prev > 0 else 0.0)
+        if len(rets) < 4:
+            return None
+        x, y = rets[:-1], rets[1:]
+        n = len(x)
+        mx, my = sum(x) / n, sum(y) / n
+        cov = sum((x[i] - mx) * (y[i] - my) for i in range(n))
+        sx = math.sqrt(sum((v - mx) ** 2 for v in x))
+        sy = math.sqrt(sum((v - my) ** 2 for v in y))
+        return cov / (sx * sy) if sx > 0 and sy > 0 else None
+
+    @staticmethod
+    def _compute_vol_ratio(candles) -> Optional[float]:
+        if len(candles) < 62:
+            return None
+        closes = [float(c.close) for c in candles]
+        rets = []
+        for i in range(1, len(closes)):
+            prev = closes[i - 1]
+            rets.append((closes[i] / prev - 1.0) if prev > 0 else 0.0)
+        if len(rets) < 61:
+            return None
+        short_rets = rets[-60:]
+        long_rets = rets[-min(240, len(rets)):]
+        short_var = sum(r * r for r in short_rets) / len(short_rets)
+        long_var = sum(r * r for r in long_rets) / len(long_rets)
+        if long_var <= 0:
+            return None
+        return math.sqrt(short_var / long_var)
 
     def _inventory_adjustments(self) -> Dict[str, object]:
         skew = D(str(self.pool.get_inventory_skew()))

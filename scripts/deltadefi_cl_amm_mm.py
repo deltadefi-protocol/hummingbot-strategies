@@ -135,6 +135,7 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
 
     # Fill-toxicity guard (widen + shrink on toxic side)
     toxicity_window_sec: int = Field(300)
+    toxicity_window_fills: int = Field(20)  # fill-count window for regime signal
     toxicity_activation_count: int = Field(8)
     toxicity_buy_ratio_soft: Decimal = Field(D("0.65"))
     toxicity_buy_ratio_hard: Decimal = Field(D("0.80"))
@@ -153,6 +154,10 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
     inventory_soft_spread_mult: Decimal = Field(D("1.30"))
     inventory_hard_spread_mult: Decimal = Field(D("1.80"))
     inventory_hard_disable_accumulation_side: bool = Field(True)
+
+    # HMM v2 options
+    hmm_use_fill_asymmetry: bool = Field(False)
+    hmm_refit_interval_sec: int = Field(1800)
 
     # FLAIR / LVR monitoring
     enable_flair_monitor: bool = Field(True)
@@ -176,8 +181,12 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
             raise ValueError("min_concentration_pct must be < max_concentration_pct")
         if self.toxicity_window_sec <= 0:
             raise ValueError("toxicity_window_sec must be > 0")
+        if self.toxicity_window_fills < 5:
+            raise ValueError("toxicity_window_fills must be >= 5")
         if self.toxicity_activation_count <= 0:
             raise ValueError("toxicity_activation_count must be > 0")
+        if self.hmm_refit_interval_sec < 60:
+            raise ValueError("hmm_refit_interval_sec must be >= 60")
         if self.flair_markout_sec <= 0:
             raise ValueError("flair_markout_sec must be > 0")
         if self.flair_window_sec <= 0:
@@ -541,7 +550,8 @@ class HMMRegimeDetector:
         self._last_fit_time: float = 0
         self._available = HMM_AVAILABLE
 
-    def _build_observations(self, candles) -> Optional[np.ndarray]:
+    def _build_observations(self, candles,
+                            fill_asymmetry_ratio: Optional[float] = None) -> Optional[np.ndarray]:
         if len(candles) < 11:
             return None
         closes = [float(c.close) for c in candles]
@@ -560,13 +570,16 @@ class HMMRegimeDetector:
             ret = returns[i]
             abs_ret = abs(ret)
             roll_vol = float(np.std(returns[i - 10:i])) if i >= 10 else 0.0
-            obs.append([ret, abs_ret, roll_vol])
+            row = [ret, abs_ret, roll_vol]
+            if fill_asymmetry_ratio is not None:
+                row.append(fill_asymmetry_ratio)
+            obs.append(row)
         return np.array(obs) if obs else None
 
-    def _fit(self, candles):
+    def _fit(self, candles, fill_asymmetry_ratio: Optional[float] = None):
         if not self._available:
             return
-        obs = self._build_observations(candles[-self.window:])
+        obs = self._build_observations(candles[-self.window:], fill_asymmetry_ratio)
         if obs is None or len(obs) < 50:
             return
         try:
@@ -584,7 +597,8 @@ class HMMRegimeDetector:
         except Exception:
             pass  # graceful degradation
 
-    def predict(self, candles) -> Optional[Dict[str, float]]:
+    def predict(self, candles,
+                fill_asymmetry_ratio: Optional[float] = None) -> Optional[Dict[str, float]]:
         if not self._available:
             return None
         if len(candles) < self.min_candles:
@@ -592,12 +606,12 @@ class HMMRegimeDetector:
 
         now = time.time()
         if self._model is None or (now - self._last_fit_time) >= self.refit_interval_sec:
-            self._fit(candles)
+            self._fit(candles, fill_asymmetry_ratio)
 
         if self._model is None or self._label_map is None:
             return None
 
-        obs = self._build_observations(candles[-20:])
+        obs = self._build_observations(candles[-20:], fill_asymmetry_ratio)
         if obs is None or len(obs) == 0:
             return None
         try:
@@ -859,6 +873,11 @@ class DeltaDefiCLAMM(StrategyV2Base):
         self._rebalancing: bool = False
         self._last_rebalance_action: str = ""
         self._indicator_log_counter: int = 0
+        self._last_fill_ts: float = 0.0
+        self._last_reposition_price: Optional[Decimal] = None
+        self._gap_check_ts: float = 0.0
+        self._last_autocorr: Optional[float] = None
+        self._last_vol_ratio: Optional[float] = None
 
     # ---- Main loop --------------------------------------------------------
 
@@ -893,6 +912,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
                 f"[{self.pool.p_lower:.6f}, {self.pool.p_upper:.6f}]"
             )
             self.pool.recenter(book_mid)
+            self._last_reposition_price = book_mid
             self._save_state()
             safe_ensure_future(self._conditional_rebalance(book_mid))
 
@@ -907,8 +927,26 @@ class DeltaDefiCLAMM(StrategyV2Base):
                         f"{drift_pct:.2f}% from range center {range_center:.6f}"
                     )
                     self.pool.recenter(self.pool.anchor_price)
+                    self._last_reposition_price = self.pool.anchor_price
                     self._save_state()
                     safe_ensure_future(self._conditional_rebalance(self.pool.anchor_price))
+
+        # Gap detection heartbeat: catches flash crashes that skip the outer wing trigger
+        now_ts = time.time()
+        if (book_mid and self._last_reposition_price and self._last_reposition_price > ZERO
+                and now_ts - self._gap_check_ts >= 30.0):
+            self._gap_check_ts = now_ts
+            gap_pct = float(abs(book_mid - self._last_reposition_price) / self._last_reposition_price)
+            half_width = float(self.pool.concentration_pct) / 100.0
+            if gap_pct > half_width:
+                self._pair_logger.warning(
+                    f"Gap detected: oracle moved {gap_pct * 100:.2f}% since last reposition "
+                    f"(threshold: {half_width * 100:.2f}%). Emergency reposition."
+                )
+                self.pool.recenter(book_mid)
+                self._last_reposition_price = book_mid
+                self._save_state()
+                safe_ensure_future(self._conditional_rebalance(book_mid))
 
         # Dynamic range update from indicators
         self._update_dynamic_range(connector)
@@ -960,7 +998,19 @@ class DeltaDefiCLAMM(StrategyV2Base):
         self._last_natr = self._natr_indicator.compute(candles)
         self._last_adx = self._adx_indicator.compute(candles)
         self._last_hurst = self._hurst_indicator.compute(candles)
-        self._last_hmm = self._hmm_detector.predict(candles)
+
+        # Compute autocorr and vol_ratio for regime composite signal
+        self._last_autocorr = self._compute_autocorr_lag1(candles)
+        self._last_vol_ratio = self._compute_vol_ratio(candles)
+
+        # HMM: pass fill asymmetry as 4th feature if configured
+        fill_asym = None
+        if self.config.hmm_use_fill_asymmetry:
+            tox = self._get_toxicity_profile()
+            n = int(tox["sample_count"])
+            if n >= self.config.toxicity_activation_count:
+                fill_asym = float(tox["buy_ratio"])
+        self._last_hmm = self._hmm_detector.predict(candles, fill_asym)
 
         new_pct = self._range_controller.compute_concentration_pct(
             self._last_natr, self._last_adx, self._last_hurst, self._last_hmm,
@@ -1152,13 +1202,12 @@ class DeltaDefiCLAMM(StrategyV2Base):
         return bid_spread, ask_spread
 
     def _get_toxicity_profile(self) -> Dict[str, Decimal]:
-        now = time.time()
-        window = self.config.toxicity_window_sec
-        while self._toxicity_recent_fills and now - self._toxicity_recent_fills[0][0] > window:
-            self._toxicity_recent_fills.popleft()
+        # Fill-count window: use last N fills regardless of elapsed time
+        window_n = self.config.toxicity_window_fills
+        recent = list(self._toxicity_recent_fills)[-window_n:]
 
-        buy_count = sum(1 for _, t in self._toxicity_recent_fills if t == TradeType.BUY)
-        sell_count = sum(1 for _, t in self._toxicity_recent_fills if t == TradeType.SELL)
+        buy_count = sum(1 for _, t in recent if t == TradeType.BUY)
+        sell_count = sum(1 for _, t in recent if t == TradeType.SELL)
         total = buy_count + sell_count
         if total <= 0:
             return {
@@ -1199,6 +1248,46 @@ class DeltaDefiCLAMM(StrategyV2Base):
             "buy_state": buy_state,
             "sell_state": sell_state,
         }
+
+    @staticmethod
+    def _compute_autocorr_lag1(candles) -> Optional[float]:
+        """Lag-1 return autocorrelation over rolling 30-candle window."""
+        if len(candles) < 32:
+            return None
+        closes = [float(c.close) for c in candles[-31:]]
+        rets = []
+        for i in range(1, len(closes)):
+            prev = closes[i - 1]
+            rets.append((closes[i] / prev - 1.0) if prev > 0 else 0.0)
+        if len(rets) < 4:
+            return None
+        x, y = rets[:-1], rets[1:]
+        n = len(x)
+        mx, my = sum(x) / n, sum(y) / n
+        cov = sum((x[i] - mx) * (y[i] - my) for i in range(n))
+        sx = math.sqrt(sum((v - mx) ** 2 for v in x))
+        sy = math.sqrt(sum((v - my) ** 2 for v in y))
+        return cov / (sx * sy) if sx > 0 and sy > 0 else None
+
+    @staticmethod
+    def _compute_vol_ratio(candles) -> Optional[float]:
+        """Ratio of short-term realized vol to long-term: EWMA_60 / EWMA_240."""
+        if len(candles) < 62:
+            return None
+        closes = [float(c.close) for c in candles]
+        rets = []
+        for i in range(1, len(closes)):
+            prev = closes[i - 1]
+            rets.append((closes[i] / prev - 1.0) if prev > 0 else 0.0)
+        if len(rets) < 61:
+            return None
+        short_rets = rets[-60:]
+        long_rets = rets[-min(240, len(rets)):]
+        short_var = sum(r * r for r in short_rets) / len(short_rets)
+        long_var = sum(r * r for r in long_rets) / len(long_rets)
+        if long_var <= 0:
+            return None
+        return math.sqrt(short_var / long_var)
 
     def _inventory_adjustments(self) -> Dict[str, object]:
         skew = D(str(self.pool.get_inventory_skew()))
@@ -1525,7 +1614,9 @@ class DeltaDefiCLAMM(StrategyV2Base):
         self.pool.update_on_fill(event.trade_type, event.amount)
 
         self._queue_flair_markout(event)
-        self._toxicity_recent_fills.append((time.time(), event.trade_type))
+        now_fill = time.time()
+        self._last_fill_ts = now_fill
+        self._toxicity_recent_fills.append((now_fill, event.trade_type))
         if self.config.enable_fill_velocity_detector or self.config.enable_momentum_spread:
             self._recent_fills.append((time.time(), event.trade_type))
 
@@ -1560,6 +1651,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
             if book_mid and not self.pool.is_in_range(book_mid):
                 self._pair_logger.info(f"Recentering after fill: {book_mid:.6f}")
                 self.pool.recenter(book_mid)
+                self._last_reposition_price = book_mid
                 self._save_state()
                 await self._conditional_rebalance(book_mid)
 

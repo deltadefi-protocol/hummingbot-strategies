@@ -703,6 +703,8 @@ class TrendValidator:
     # Forward-return horizons (in candles — 1-minute data)
     HORIZONS = {"15m": 15, "1h": 60, "4h": 240}
 
+    FILL_STALE_CANDLES = 20  # exclude candles where fill asymmetry hasn't updated for >20 min
+
     def __init__(self):
         # Parallel lists — one entry per candle
         self._closes: List[float] = []
@@ -712,6 +714,11 @@ class TrendValidator:
         self._natr: List[float] = []
         self._hmm_regime: List[str] = []  # "ranging", "trending", "volatile", "n/a"
         self._timestamps: List[float] = []
+        # New regime signals
+        self._fill_asymmetry_ratio: List[float] = []
+        self._fill_asymmetry_staleness_sec: List[float] = []
+        self._autocorr_lag1: List[float] = []
+        self._vol_ratio: List[float] = []
 
     # -- recording --
 
@@ -728,6 +735,16 @@ class TrendValidator:
         # hmm_regime format: "ranging(85%)" — extract label
         regime = hmm_raw.split("(")[0] if "(" in str(hmm_raw) else str(hmm_raw)
         self._hmm_regime.append(regime)
+
+        # New regime signals
+        buy_r = float(strategy_data.get("toxicity_buy_ratio", 0))
+        sell_r = float(strategy_data.get("toxicity_sell_ratio", 0))
+        # fill_asymmetry_ratio: buy_ratio when buys dominate, sell_ratio otherwise
+        self._fill_asymmetry_ratio.append(max(buy_r, sell_r))
+        self._fill_asymmetry_staleness_sec.append(
+            float(strategy_data.get("fill_asymmetry_staleness_sec", -1)))
+        self._autocorr_lag1.append(float(strategy_data.get("autocorr_lag1", 0)))
+        self._vol_ratio.append(float(strategy_data.get("vol_ratio", 1)))
 
     # -- analysis --
 
@@ -822,7 +839,127 @@ class TrendValidator:
                     results[f"corr_natr_vs_fwd_vol_{label}"] = round(
                         corr_natr, 4)
 
+        # --- Classification metrics for new regime signals ---
+        n_new = min(
+            len(self._fill_asymmetry_ratio),
+            len(self._autocorr_lag1),
+            len(self._vol_ratio),
+            len(self._closes),
+        )
+        if n_new >= 100:
+            for label, horizon in self.HORIZONS.items():
+                if n_new <= horizon:
+                    continue
+                ground_truth = self._label_regime(self._closes[:n_new], horizon)
+
+                # Candle-minute interval: 1 candle ≈ 1 minute
+                stale_thresh_sec = self.FILL_STALE_CANDLES * 60.0
+
+                # Signals to evaluate: (name, values, threshold_to_call_trending)
+                signal_configs = [
+                    ("fill_asymmetry",
+                     self._fill_asymmetry_ratio[:n_new - horizon],
+                     0.65),
+                    ("autocorr_lag1",
+                     self._autocorr_lag1[:n_new - horizon],
+                     0.05),
+                    ("vol_ratio",
+                     self._vol_ratio[:n_new - horizon],
+                     1.2),
+                ]
+
+                for sig_name, sig_vals, threshold in signal_configs:
+                    # Exclude stale fill asymmetry candles
+                    staleness = self._fill_asymmetry_staleness_sec[:n_new - horizon]
+                    mask = [
+                        gt != "ambiguous" and (
+                            sig_name != "fill_asymmetry"
+                            or s < 0  # -1 means no fill yet recorded (include)
+                            or s <= stale_thresh_sec
+                        )
+                        for gt, s in zip(ground_truth, staleness)
+                    ]
+                    predicted = [
+                        "trending" if v >= threshold else "choppy"
+                        for v in sig_vals
+                    ]
+                    filtered_pred = [p for p, m in zip(predicted, mask) if m]
+                    filtered_gt = [
+                        gt for gt, m in zip(ground_truth, mask) if m
+                    ]
+                    if len(filtered_gt) < 20:
+                        continue
+                    prec, rec, f1, mcc = self._classification_metrics(
+                        filtered_pred, filtered_gt)
+                    prefix = f"{sig_name}_{label}"
+                    results[f"{prefix}_precision"] = round(prec, 4)
+                    results[f"{prefix}_recall"] = round(rec, 4)
+                    results[f"{prefix}_f1"] = round(f1, 4)
+                    results[f"{prefix}_mcc"] = round(mcc, 4)
+                    results[f"{prefix}_n"] = len(filtered_gt)
+
         return results
+
+    @staticmethod
+    def _label_regime(closes: List[float], horizon: int) -> List[str]:
+        """Ground truth regime labels using hindsight forward returns."""
+        n = len(closes)
+        if n < horizon + 2:
+            return []
+        m = n - horizon
+
+        fwd_abs = []
+        for i in range(m):
+            r = abs((closes[i + horizon] - closes[i]) / closes[i]) if closes[i] > 0 else 0
+            fwd_abs.append(r)
+
+        sorted_abs = sorted(fwd_abs)
+        p25 = sorted_abs[max(0, int(0.25 * len(sorted_abs)) - 1)]
+        p75 = sorted_abs[max(0, int(0.75 * len(sorted_abs)) - 1)]
+
+        labels = []
+        for i in range(m):
+            r = fwd_abs[i]
+            if r >= p75:
+                # Confirm momentum: autocorr of forward returns > 0
+                fwd_rets = []
+                for j in range(i + 1, i + horizon):
+                    if j < n and closes[j - 1] > 0:
+                        fwd_rets.append((closes[j] - closes[j - 1]) / closes[j - 1])
+                autocorr = 0.0
+                if len(fwd_rets) >= 4:
+                    x, y = fwd_rets[:-1], fwd_rets[1:]
+                    k = len(x)
+                    mx, my = sum(x) / k, sum(y) / k
+                    cov = sum((x[j] - mx) * (y[j] - my) for j in range(k))
+                    sx = math.sqrt(sum((v - mx) ** 2 for v in x))
+                    sy = math.sqrt(sum((v - my) ** 2 for v in y))
+                    autocorr = cov / (sx * sy) if sx > 0 and sy > 0 else 0.0
+                labels.append("trending")
+            elif r <= p25:
+                labels.append("choppy")
+            else:
+                labels.append("ambiguous")
+        return labels
+
+    @staticmethod
+    def _classification_metrics(
+            predicted: List[str], ground_truth: List[str]) -> tuple:
+        """Returns (precision, recall, f1, mcc) for 'trending' as positive class."""
+        tp = sum(p == "trending" and g == "trending"
+                 for p, g in zip(predicted, ground_truth))
+        fp = sum(p == "trending" and g == "choppy"
+                 for p, g in zip(predicted, ground_truth))
+        fn = sum(p == "choppy" and g == "trending"
+                 for p, g in zip(predicted, ground_truth))
+        tn = sum(p == "choppy" and g == "choppy"
+                 for p, g in zip(predicted, ground_truth))
+        precision = tp / (tp + fp) if tp + fp > 0 else 0.0
+        recall = tp / (tp + fn) if tp + fn > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall > 0 else 0.0
+        denom = math.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+        mcc = (tp * tn - fp * fn) / denom if denom > 0 else 0.0
+        return precision, recall, f1, mcc
 
     def print_summary(self, metrics: dict):
         if not metrics:
@@ -878,6 +1015,20 @@ class TrendValidator:
                 cnt = metrics.get(f"hmm_{reg}_count_{label}", 0)
                 print(f"  HMM {reg:10s}  avg|fwd|={avg:.4f}%  n={cnt}")
 
+            # Classification metrics for new signals
+            for sig in ("fill_asymmetry", "autocorr_lag1", "vol_ratio"):
+                f1 = metrics.get(f"{sig}_{label}_f1")
+                if f1 is None:
+                    continue
+                prec = metrics.get(f"{sig}_{label}_precision", 0)
+                rec = metrics.get(f"{sig}_{label}_recall", 0)
+                mcc = metrics.get(f"{sig}_{label}_mcc", 0)
+                n_sig = metrics.get(f"{sig}_{label}_n", 0)
+                print(
+                    f"  {sig:20s}  F1={f1:.3f}  P={prec:.3f}  R={rec:.3f}"
+                    f"  MCC={mcc:.3f}  n={n_sig}"
+                )
+
         print("=" * 70)
 
     def save_csv(self, path: str):
@@ -885,14 +1036,27 @@ class TrendValidator:
         n = len(self._closes)
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
 
+        has_new = len(self._fill_asymmetry_ratio) == n
+
         with open(path, "w", newline="") as f:
             writer = csv.writer(f)
             header = ["timestamp", "close", "effective_trend", "adx",
                       "hurst", "natr", "hmm_regime"]
+            if has_new:
+                header += ["fill_asymmetry_ratio", "fill_asymmetry_staleness_sec",
+                           "autocorr_lag1", "vol_ratio"]
             for label, h in self.HORIZONS.items():
                 header.append(f"fwd_return_{label}")
                 header.append(f"fwd_abs_return_{label}")
+                if has_new:
+                    header.append(f"ground_truth_{label}")
             writer.writerow(header)
+
+            # Pre-compute ground truth labels for each horizon
+            gt_by_horizon = {}
+            if has_new:
+                for label, h in self.HORIZONS.items():
+                    gt_by_horizon[label] = self._label_regime(self._closes, h)
 
             for i in range(n):
                 row = [
@@ -900,6 +1064,13 @@ class TrendValidator:
                     self._effective_trend[i], self._adx[i],
                     self._hurst[i], self._natr[i], self._hmm_regime[i],
                 ]
+                if has_new:
+                    row += [
+                        round(self._fill_asymmetry_ratio[i], 4),
+                        round(self._fill_asymmetry_staleness_sec[i], 1),
+                        round(self._autocorr_lag1[i], 4),
+                        round(self._vol_ratio[i], 4),
+                    ]
                 for label, h in self.HORIZONS.items():
                     if i + h < n:
                         r = ((self._closes[i + h] - self._closes[i])
@@ -908,6 +1079,9 @@ class TrendValidator:
                         row.append(round(abs(r), 6))
                     else:
                         row.extend(["", ""])
+                    if has_new:
+                        gt = gt_by_horizon.get(label, [])
+                        row.append(gt[i] if i < len(gt) else "")
                 writer.writerow(row)
 
         print(f"Indicator validation data saved to {path}")
@@ -1227,6 +1401,8 @@ def main():
     cl.add_argument("--trend-order-scale-factor", type=Decimal, default=D("0.0"))
     cl.add_argument("--trend-halt-threshold", type=Decimal, default=D("0.0"))
     cl.add_argument("--toxicity-window-sec", type=int, default=300)
+    cl.add_argument("--toxicity-window-fills", type=int, default=20)
+    cl.add_argument("--hmm-use-fill-asymmetry", action="store_true", default=False)
     cl.add_argument("--toxicity-activation-count", type=int, default=8)
     cl.add_argument("--toxicity-buy-ratio-soft", type=Decimal, default=D("0.65"))
     cl.add_argument("--toxicity-buy-ratio-hard", type=Decimal, default=D("0.80"))
