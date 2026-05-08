@@ -1114,11 +1114,25 @@ class DeltaDefiCLAMM(StrategyV2Base):
         self._gap_check_ts: float = 0.0
         self._last_autocorr: Optional[float] = None
         self._last_vol_ratio: Optional[float] = None
+        # Staleness tracking: get_mid_price() returns cached last value during
+        # WS disconnects, so we mark book "fresh" only when mid actually changes.
+        self._last_book_mid: Optional[Decimal] = None
+        self._last_book_update_ts: float = 0.0
+        # Persistence health gate; set by _verify_persistence() at startup.
+        self._persistence_broken: bool = False
+
+        # Surface I/O faults at startup rather than after the first fill.
+        self._verify_persistence()
 
     # ---- Main loop --------------------------------------------------------
 
     def on_tick(self):
         if self._stopped:
+            return
+
+        # Refuse to operate when persistence is known broken — a market-maker
+        # with no state save cannot recover from a restart.
+        if self._persistence_broken:
             return
 
         # Invalidate per-tick caches at the start of each tick
@@ -1136,6 +1150,22 @@ class DeltaDefiCLAMM(StrategyV2Base):
             self._auto_scale_pool()
 
         if self._check_circuit_breakers():
+            return
+
+        # Stale-book guard — if book hasn't moved in STALE_BOOK_THRESHOLD_SEC,
+        # assume the WS feed is broken or the market is genuinely frozen.
+        # Either way, pull resting orders and skip the rest of the tick to
+        # avoid quoting on a poisoned anchor or letting stale orders sit on
+        # the exchange across a reconnect window.
+        STALE_BOOK_THRESHOLD_SEC = 10.0
+        if (self._last_book_update_ts > 0
+                and (time.time() - self._last_book_update_ts) > STALE_BOOK_THRESHOLD_SEC):
+            if self.get_active_orders(connector_name=self.config.exchange):
+                self._pair_logger.warning(
+                    f"Book stale for {time.time() - self._last_book_update_ts:.1f}s; "
+                    f"cancelling resting orders and skipping tick."
+                )
+                self._cancel_all_orders()
             return
 
         # Keep anchor fresh
@@ -1158,7 +1188,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
                         f"{outer_trig*100:.2f}% from pool center {pool_center:.6f}")
                     self.pool.recenter(book_mid)
                     self._last_reposition_price = book_mid
-                    self._save_state()
+                    self._save_state_safe()
                     safe_ensure_future(self._conditional_rebalance(book_mid))
                     _recentered = True
 
@@ -1170,7 +1200,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
             )
             self.pool.recenter(book_mid)
             self._last_reposition_price = book_mid
-            self._save_state()
+            self._save_state_safe()
             safe_ensure_future(self._conditional_rebalance(book_mid))
             _recentered = True
 
@@ -1186,7 +1216,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
                     )
                     self.pool.recenter(self.pool.anchor_price)
                     self._last_reposition_price = self.pool.anchor_price
-                    self._save_state()
+                    self._save_state_safe()
                     safe_ensure_future(self._conditional_rebalance(self.pool.anchor_price))
 
         # Gap detection heartbeat: catches flash crashes that skip the outer wing trigger.
@@ -1205,7 +1235,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
                 )
                 self.pool.recenter(book_mid)
                 self._last_reposition_price = book_mid
-                self._save_state()
+                self._save_state_safe()
                 safe_ensure_future(self._conditional_rebalance(book_mid))
 
         # Dynamic range update from indicators
@@ -1318,7 +1348,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
         if range_changed:
             old_pct = self.pool.concentration_pct
             self.pool.set_concentration(new_pct)
-            self._save_state()
+            self._save_state_safe()
             self._pair_logger.info(
                 f"Dynamic range: {old_pct:.2f}% -> {new_pct:.2f}% "
                 f"[{self.pool.p_lower:.6f}, {self.pool.p_upper:.6f}]"
@@ -2262,7 +2292,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
         if is_hedge:
             self._hedge_order_ids.discard(getattr(event, "order_id", None))
             self._process_hedge_fill(event)
-            self._save_state()
+            self._save_state_safe()
             self._pair_logger.info(
                 f"Hedge FILL {event.trade_type.name} {event.amount} @ {event.price} | "
                 f"hedge pos: {self._hedge_book.side or 'flat'} {self._hedge_book.size} @ "
@@ -2295,7 +2325,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
         if self.config.enable_fill_velocity_detector or self.config.enable_momentum_spread:
             self._recent_fills.append((time.time(), event.trade_type))
 
-        self._save_state()
+        self._save_state_safe()
 
         pnl = self._get_pnl_breakdown()
         spread_str = f"{pnl['spread_capture']:+.4f}"
@@ -2381,7 +2411,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
                 self._pair_logger.info(f"Recentering after fill: {book_mid:.6f}")
                 self.pool.recenter(book_mid)
                 self._last_reposition_price = book_mid
-                self._save_state()
+                self._save_state_safe()
                 await self._conditional_rebalance(book_mid)
 
             results = await connector.cancel_all(timeout_seconds=10.0)
@@ -2469,7 +2499,16 @@ class DeltaDefiCLAMM(StrategyV2Base):
     def _get_book_mid(self) -> Optional[Decimal]:
         try:
             mid = self.connectors[self.config.exchange].get_mid_price(self.config.trading_pair)
-            return mid if mid is not None and mid > ZERO else None
+            if mid is None or mid <= ZERO:
+                return None
+            # Mark book "fresh" only when the value actually changes —
+            # get_mid_price() returns the cached last value during WS outages,
+            # so updating the timestamp on every call would defeat the
+            # staleness guard in on_tick.
+            if self._last_book_mid is None or mid != self._last_book_mid:
+                self._last_book_mid = mid
+                self._last_book_update_ts = time.time()
+            return mid
         except Exception:
             return None
 
@@ -2522,7 +2561,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
             return False
         self.pool = ConcentratedPool(mid, pool_depth, self.config.base_concentration_pct)
         self._pool_scaled = True
-        self._save_state()
+        self._save_state_safe()
         base_token, quote_token = self.config.trading_pair.split("-")
         self._pair_logger.info(
             f"Initialized CL pool: {self.config.trading_pair} @ {mid} "
@@ -2570,7 +2609,7 @@ class DeltaDefiCLAMM(StrategyV2Base):
         self.pool.initial_quote = self.pool.quote
         self._base_flow *= scale
         self._quote_flow *= scale
-        self._save_state()
+        self._save_state_safe()
         self._pair_logger.info(f"Auto-scaled CL pool: L {old_L:.0f} -> {self.pool.L:.0f} ({scale:.2f}x)")
 
     # ---- State persistence ------------------------------------------------
@@ -2584,6 +2623,46 @@ class DeltaDefiCLAMM(StrategyV2Base):
         state["hedge_fills"] = self._hedge_fills
         with open(self._state_file, "w") as f:
             json.dump(state, f, indent=2)
+
+    def _save_state_safe(self):
+        """Save state, swallowing exceptions so I/O faults (PermissionError,
+        disk full, etc.) cannot abort callers like did_fill_order or recenter
+        branches in on_tick. The fault is logged at ERROR; persistence health
+        is checked separately at startup via _verify_persistence().
+        """
+        try:
+            self._save_state()
+        except Exception as e:
+            self._pair_logger.error(
+                f"Save state failed: {e} (path={self._state_file})", exc_info=True
+            )
+
+    def _verify_persistence(self) -> bool:
+        """Eager save validation — call at startup so permission/disk faults
+        surface in seconds, not after the first fill (which can be hours).
+        Sets _persistence_broken on failure. Pool may be None at this point;
+        in that case we write a minimal probe payload instead.
+        """
+        try:
+            if self.pool is not None:
+                self._save_state()
+            else:
+                with open(self._state_file, "w") as f:
+                    json.dump({"_persistence_probe": True}, f)
+                # Probe wrote a sentinel; remove it so a real save replaces it.
+                try:
+                    os.remove(self._state_file)
+                except OSError:
+                    pass
+            return True
+        except Exception as e:
+            self._persistence_broken = True
+            self._pair_logger.error(
+                f"PERSISTENCE BROKEN at startup: {e} (path={self._state_file}). "
+                f"Strategy will refuse to place orders until this is fixed.",
+                exc_info=True,
+            )
+            return False
 
     def _load_state(self) -> dict:
         if not os.path.exists(self._state_file):
