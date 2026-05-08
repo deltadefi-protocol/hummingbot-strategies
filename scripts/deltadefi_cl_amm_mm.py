@@ -484,13 +484,36 @@ class ConcentratedPool:
         self.initial_quote = self.quote
 
     def set_concentration(self, new_pct: Decimal):
+        # Capture current state BEFORE updating range bounds — get_mid_price()
+        # depends on p_upper, so changing the range without re-deriving base
+        # would silently shift the AMM mid price (causing the strategy to quote
+        # around a phantom price and cross the spread on the next fill).
+        current_price = self.get_mid_price()
+        skew_base = (self.base / self.initial_base) if self.initial_base > ZERO else D(1)
+        skew_quote = (self.quote / self.initial_quote) if self.initial_quote > ZERO else D(1)
+
         self.concentration_pct = new_pct
         pct = new_pct / D(100)
         self.p_lower = self.anchor_price * (D(1) - pct)
         self.p_upper = self.anchor_price * (D(1) + pct)
-        pool_price = self.get_mid_price()
-        if not self.is_in_range(pool_price):
+
+        # If preserved price would fall outside the new range (only possible
+        # when narrowing), fall back to a full recenter at the anchor.
+        if not self.is_in_range(current_price):
             self.recenter(self.anchor_price)
+            return
+
+        # Re-derive base/quote at the preserved current_price under the new range.
+        sqrt_p = _sqrt(current_price)
+        sqrt_pa = _sqrt(self.p_lower)
+        sqrt_pb = _sqrt(self.p_upper)
+        self.base = max(ZERO, self.L * (D(1) / sqrt_p - D(1) / sqrt_pb))
+        self.quote = max(ZERO, self.L * (sqrt_p - sqrt_pa))
+
+        # Re-derive initial_base/initial_quote so the inventory skew ratio is
+        # invariant across the range change.
+        self.initial_base = (self.base / skew_base) if skew_base > ZERO else self.base
+        self.initial_quote = (self.quote / skew_quote) if skew_quote > ZERO else self.quote
 
     def is_in_range(self, price: Decimal) -> bool:
         return self.p_lower <= price <= self.p_upper
