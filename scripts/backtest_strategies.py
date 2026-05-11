@@ -41,6 +41,12 @@ class _OrderType(Enum):
         return self in (_OrderType.LIMIT, _OrderType.LIMIT_MAKER)
 
 
+class _PositionAction(Enum):
+    OPEN = "OPEN"
+    CLOSE = "CLOSE"
+    NIL = "NIL"
+
+
 class _OrderFilledEvent(NamedTuple):
     timestamp: float = 0
     order_id: str = ""
@@ -74,12 +80,15 @@ def _install_hummingbot_stubs():
     _make_module("hummingbot.core.data_type.common", {
         "TradeType": _TradeType,
         "OrderType": _OrderType,
+        "PositionAction": _PositionAction,
     })
 
-    # hummingbot.core.event.events — OrderFilledEvent
+    # hummingbot.core.event.events — OrderFilledEvent, OrderCancelledEvent, MarketOrderFailureEvent
     _make_module("hummingbot.core.event")
     _make_module("hummingbot.core.event.events", {
         "OrderFilledEvent": _OrderFilledEvent,
+        "OrderCancelledEvent": type("OrderCancelledEvent", (), {}),
+        "MarketOrderFailureEvent": type("MarketOrderFailureEvent", (), {}),
     })
 
     # hummingbot.core.rate_oracle.rate_oracle — RateOracle
@@ -244,7 +253,7 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         self.hmm_n_states = int(config.get("hmm_n_states", 3))
         self.hmm_min_candles = int(config.get("hmm_min_candles", 200))
         self.hmm_refit_interval_sec = int(
-            config.get("hmm_refit_interval_sec", 1800))
+            config.get("hmm_refit_interval_sec", 86400))
         self.hmm_window = int(config.get("hmm_window", 500))
         self.hmm_confidence_threshold = D(str(
             config.get("hmm_confidence_threshold", "0.80")))
@@ -757,7 +766,7 @@ class CLAMMBacktestStrategy(BacktestStrategy):
     def _compute_vol_ratio(candles) -> Optional[float]:
         if len(candles) < 62:
             return None
-        closes = [float(c.close) for c in candles]
+        closes = [float(c.close) for c in candles[-241:]]
         rets = []
         for i in range(1, len(closes)):
             prev = closes[i - 1]

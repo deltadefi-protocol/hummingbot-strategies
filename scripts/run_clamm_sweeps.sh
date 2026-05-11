@@ -2,6 +2,7 @@
 set -e
 
 PYTHON="/Users/yuyanyuk/miniforge3/envs/hummingbot/bin/python -u"
+export PYTHONPATH="/Users/yuyanyuk/Git/hummingbot:${PYTHONPATH}"
 SYMBOL=ADAUSDC
 WORKERS=8
 

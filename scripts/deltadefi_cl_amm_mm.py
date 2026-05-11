@@ -260,6 +260,12 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
     order_safe_ratio: Decimal = Field(D("0.5"))
     order_refresh_time: int = Field(5)
     refresh_on_fill_only: bool = Field(True)
+    # Pull resting orders and skip the tick if no order-book update of any kind
+    # (snapshot or diff) has arrived for this long — a dead-feed detector.
+    # Driven by last_diff_uid, NOT the mid value, so a quiet illiquid market
+    # does not trip it. Set generously; illiquid pairs go long stretches
+    # without depth churn.
+    stale_book_threshold_sec: float = Field(60.0)
     balance_buffer_pct: Decimal = Field(D("0.90"))
     pool_price_weight: Decimal = Field(D("0.70"))
     anchor_ema_alpha: Decimal = Field(D("0.05"))
@@ -1114,10 +1120,12 @@ class DeltaDefiCLAMM(StrategyV2Base):
         self._gap_check_ts: float = 0.0
         self._last_autocorr: Optional[float] = None
         self._last_vol_ratio: Optional[float] = None
-        # Staleness tracking: get_mid_price() returns cached last value during
-        # WS disconnects, so we mark book "fresh" only when mid actually changes.
-        self._last_book_mid: Optional[Decimal] = None
-        self._last_book_update_ts: float = 0.0
+        # Order-book freshness tracking: last_diff_uid increments on every
+        # depth update even when top-of-book (mid) doesn't move, so it is a
+        # true "is the feed flowing" signal — unlike the mid value, which is
+        # naturally static on illiquid pairs.
+        self._last_ob_uid: int = -1
+        self._last_ob_uid_change_ts: float = 0.0
         # Persistence health gate; set by _verify_persistence() at startup.
         self._persistence_broken: bool = False
 
@@ -1152,21 +1160,28 @@ class DeltaDefiCLAMM(StrategyV2Base):
         if self._check_circuit_breakers():
             return
 
-        # Stale-book guard — if book hasn't moved in STALE_BOOK_THRESHOLD_SEC,
-        # assume the WS feed is broken or the market is genuinely frozen.
-        # Either way, pull resting orders and skip the rest of the tick to
-        # avoid quoting on a poisoned anchor or letting stale orders sit on
-        # the exchange across a reconnect window.
-        STALE_BOOK_THRESHOLD_SEC = 10.0
-        if (self._last_book_update_ts > 0
-                and (time.time() - self._last_book_update_ts) > STALE_BOOK_THRESHOLD_SEC):
-            if self.get_active_orders(connector_name=self.config.exchange):
-                self._pair_logger.warning(
-                    f"Book stale for {time.time() - self._last_book_update_ts:.1f}s; "
-                    f"cancelling resting orders and skipping tick."
-                )
-                self._cancel_all_orders()
-            return
+        # Stale-book guard — fire only when no order-book update of ANY kind
+        # (snapshot or diff) has arrived for stale_book_threshold_sec.
+        # last_diff_uid bumps on every depth change, so a quiet illiquid
+        # market does NOT trip this; only a genuinely dead feed does. On a
+        # stale feed, pull resting orders (they'd otherwise sit on the
+        # exchange across a reconnect) and skip the rest of the tick (so we
+        # don't quote on a poisoned anchor).
+        now_ts = time.time()
+        ob_uid = self._order_book_uid()
+        if ob_uid is not None:
+            if ob_uid != self._last_ob_uid:
+                self._last_ob_uid = ob_uid
+                self._last_ob_uid_change_ts = now_ts
+            if (self._last_ob_uid_change_ts > 0
+                    and now_ts - self._last_ob_uid_change_ts > self.config.stale_book_threshold_sec):
+                if self.get_active_orders(connector_name=self.config.exchange):
+                    self._pair_logger.warning(
+                        f"Order book stale for {now_ts - self._last_ob_uid_change_ts:.1f}s "
+                        f"(no depth updates); cancelling resting orders and skipping tick."
+                    )
+                    self._cancel_all_orders()
+                return
 
         # Keep anchor fresh
         book_mid = self._get_book_mid()
@@ -2499,16 +2514,18 @@ class DeltaDefiCLAMM(StrategyV2Base):
     def _get_book_mid(self) -> Optional[Decimal]:
         try:
             mid = self.connectors[self.config.exchange].get_mid_price(self.config.trading_pair)
-            if mid is None or mid <= ZERO:
-                return None
-            # Mark book "fresh" only when the value actually changes —
-            # get_mid_price() returns the cached last value during WS outages,
-            # so updating the timestamp on every call would defeat the
-            # staleness guard in on_tick.
-            if self._last_book_mid is None or mid != self._last_book_mid:
-                self._last_book_mid = mid
-                self._last_book_update_ts = time.time()
-            return mid
+            return mid if mid is not None and mid > ZERO else None
+        except Exception:
+            return None
+
+    def _order_book_uid(self) -> Optional[int]:
+        """Monotonic id of the latest order-book update (snapshot or diff).
+        Used by the stale-book guard to detect a dead feed without conflating
+        it with a quiet market. Returns None if no book exists yet.
+        """
+        try:
+            ob = self.connectors[self.config.exchange].get_order_book(self.config.trading_pair)
+            return max(int(ob.snapshot_uid), int(ob.last_diff_uid))
         except Exception:
             return None
 
