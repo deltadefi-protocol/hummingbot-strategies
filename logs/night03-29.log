@@ -1,0 +1,137 @@
+2026-03-29 17:00:50,865 - 803759 - hummingbot.core.rate_oracle.sources.rate_source_base - ERROR - Unexpected error while retrieving rates from Binance. Check the log file for more info.
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/connector.py", line 1313, in _wrap_create_connection
+    return await self._loop.create_connection(*args, **kwargs, sock=sock)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/asyncio/base_events.py", line 1201, in create_connection
+    transport, protocol = await self._create_connection_transport(
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        ssl_shutdown_timeout=ssl_shutdown_timeout)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/asyncio/base_events.py", line 1234, in _create_connection_transport
+    await waiter
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/asyncio/selector_events.py", line 984, in _read_ready__get_buffer
+    nbytes = self._sock.recv_into(buf)
+ConnectionResetError: [Errno 104] Connection reset by peer
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/rate_oracle/sources/binance_rate_source.py", line 54, in _get_binance_prices
+    pairs_prices = await exchange.get_all_pairs_prices()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/connector/exchange/binance/binance_exchange.py", line 118, in get_all_pairs_prices
+    pairs_prices = await self._api_get(path_url=CONSTANTS.TICKER_BOOK_PATH_URL)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 894, in _api_get
+    return await self._api_request(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 937, in _api_request
+    request_result = await rest_assistant.execute_request(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 48, in execute_request
+    response = await self.execute_request_and_get_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 95, in execute_request_and_get_response
+    response = await self.call(request=request, timeout=timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 109, in call
+    resp = await wait_for(self._connection.call(request), timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/rest_connection.py", line 11, in call
+    aiohttp_resp = await self._client_session.request(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/client.py", line 779, in _request
+    resp = await handler(req)
+           ^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/client.py", line 734, in _connect_and_send_request
+    conn = await self._connector.connect(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        req, traces=traces, timeout=real_timeout
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/connector.py", line 672, in connect
+    proto = await self._create_connection(req, traces, timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/connector.py", line 1239, in _create_connection
+    _, proto = await self._create_direct_connection(req, traces, timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/connector.py", line 1611, in _create_direct_connection
+    raise last_exc
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/connector.py", line 1580, in _create_direct_connection
+    transp, proto = await self._wrap_create_connection(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/connector.py", line 1321, in _wrap_create_connection
+    raise client_error(req.connection_key, exc) from exc
+aiohttp.client_exceptions.ClientConnectorError: Cannot connect to host api.binance.com:443 ssl:default [Connection reset by peer]
+2026-03-30 03:53:08,724 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-30 03:53:08,784 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-03-30 05:47:25,713 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-03-30 05:47:30,772 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-30 15:25:35,077 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-30 15:25:35,152 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-03-30 15:44:19,747 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-03-30 15:44:24,812 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-30 15:58:09,127 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-30 15:58:09,196 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)

@@ -1,0 +1,30 @@
+2026-03-29 03:27:29,215 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-29 03:27:29,277 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-03-29 03:41:26,238 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-29 03:41:26,296 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-03-29 03:45:37,495 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-03-29 03:45:42,548 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-29 09:14:58,136 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-29 09:14:58,205 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)

@@ -1,0 +1,155 @@
+2026-03-26 02:21:34,436 - 106579 - hummingbot.client.hummingbot_application - INFO - stop command initiated.
+2026-03-26 02:23:00,198 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - INFO - Network status has changed to NetworkStatus.CONNECTED. Starting networking...
+2026-03-26 02:23:00,367 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - INFO - Operation wallet initialized successfully for transaction signing
+2026-03-26 02:23:00,417 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-03-26 02:23:00,447 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-03-26 02:23:00,448 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-26 02:23:01,048 - 106579 - hummingbot.strategy.strategy_v2_base - WARNING - deltadefi is not ready. Please wait...
+2026-03-26 02:23:03,001 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Ask orderbook for NIGHT-USDM is empty.
+2026-03-26 02:23:03,001 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Bid orderbook for NIGHT-USDM is empty.
+2026-03-26 02:23:03,003 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Ask orderbook for NIGHT-USDM is empty.
+2026-03-26 02:23:03,003 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Bid orderbook for NIGHT-USDM is empty.
+2026-03-26 02:23:03,003 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Ask orderbook for NIGHT-USDM is empty.
+2026-03-26 02:23:03,003 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Bid orderbook for NIGHT-USDM is empty.
+2026-03-26 02:23:03,624 - 106579 - hummingbot.connector.client_order_tracker - INFO - Created LIMIT SELL order hbot-deltadefiSNTUM64ddd5bc4ef0f182571cca4f351dcb310e0c8c0ec3132 for 2917.68 NIGHT-USDM at 0.04905.
+2026-03-26 02:23:03,638 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774462983.0, "type": "OrderType.LIMIT", "trading_pair": "NIGHT-USDM", "amount": "2917.68", "price": "0.04905", "order_id": "hbot-deltadefiSNTUM64ddd5bc4ef0f182571cca4f351dcb310e0c8c0ec3132", "creation_timestamp": 1774462983.0, "exchange_order_id": "92a54560-5675-4901-a4ca-81aede1a4f51", "leverage": 1, "position": "NIL", "event_name": "SellOrderCreatedEvent", "event_source": "deltadefi"}
+2026-03-26 02:23:03,654 - 106579 - hummingbot.connector.client_order_tracker - INFO - Created LIMIT BUY order hbot-deltadefiBNTUM64ddd5bc4fb62182571cca4f351dcb310e0c8c0ec3132 for 2941.12 NIGHT-USDM at 0.04866.
+2026-03-26 02:23:03,666 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774462983.0, "type": "OrderType.LIMIT", "trading_pair": "NIGHT-USDM", "amount": "2941.12", "price": "0.04866", "order_id": "hbot-deltadefiBNTUM64ddd5bc4fb62182571cca4f351dcb310e0c8c0ec3132", "creation_timestamp": 1774462983.0, "exchange_order_id": "879b430d-1957-495d-945d-c5d5896b123d", "leverage": 1, "position": "NIL", "event_name": "BuyOrderCreatedEvent", "event_source": "deltadefi"}
+2026-03-26 02:23:04,001 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Ask orderbook for NIGHT-USDM is empty.
+2026-03-26 02:23:04,001 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Bid orderbook for NIGHT-USDM is empty.
+2026-03-26 02:23:04,001 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Ask orderbook for NIGHT-USDM is empty.
+2026-03-26 02:23:04,001 - 106579 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Bid orderbook for NIGHT-USDM is empty.
+2026-03-26 02:24:27,119 - 106579 - hummingbot.connector.client_order_tracker - INFO - The BUY order hbot-deltadefiBNTUM64ddd5bc4fb62182571cca4f351dcb310e0c8c0ec3132 amounting to 2941.12/2941.12 NIGHT has been filled at 0.04866 USDM.
+2026-03-26 02:24:27,137 - 106579 - hummingbot.strategy.strategy_v2_base - INFO - CL-AMM BUY 2941.1200 @ 0.048660 | P&L: -66.6717 | pool: 0.048576 | range: [0.046413, 0.051298] [clock=2026-03-25 18:24:27+00:00]
+2026-03-26 02:24:27,138 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463067.0, "order_id": "hbot-deltadefiBNTUM64ddd5bc4fb62182571cca4f351dcb310e0c8c0ec3132", "trading_pair": "NIGHT-USDM", "trade_type": "TradeType.BUY", "order_type": "OrderType.LIMIT", "price": "0.04866", "amount": "2941.12", "trade_fee": {"percent": "0", "percent_token": "NIGHT", "flat_fees": [{"token": "NIGHT", "amount": "2.941119"}]}, "exchange_trade_id": "24bec17d-40ea-4e26-a803-89600a844728", "exchange_order_id": "879b430d-1957-495d-945d-c5d5896b123d", "leverage": 1, "position": "NIL", "event_name": "OrderFilledEvent", "event_source": "deltadefi"}
+2026-03-26 02:24:27,197 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463067.0, "order_id": "hbot-deltadefiBNTUM64ddd5bc4fb62182571cca4f351dcb310e0c8c0ec3132", "base_asset": "NIGHT", "quote_asset": "USDM", "base_asset_amount": "2941.12", "quote_asset_amount": "143.114899", "order_type": "OrderType.LIMIT", "exchange_order_id": "879b430d-1957-495d-945d-c5d5896b123d", "event_name": "BuyOrderCompletedEvent", "event_source": "deltadefi"}
+2026-03-26 02:24:27,197 - 106579 - hummingbot.connector.client_order_tracker - INFO - BUY order hbot-deltadefiBNTUM64ddd5bc4fb62182571cca4f351dcb310e0c8c0ec3132 completely filled.
+2026-03-26 02:24:27,252 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463067.0, "order_id": "hbot-deltadefiSNTUM64ddd5bc4ef0f182571cca4f351dcb310e0c8c0ec3132", "exchange_order_id": "92a54560-5675-4901-a4ca-81aede1a4f51", "event_name": "OrderCancelledEvent", "event_source": "deltadefi"}
+2026-03-26 02:24:27,252 - 106579 - hummingbot.connector.client_order_tracker - INFO - Successfully canceled order hbot-deltadefiSNTUM64ddd5bc4ef0f182571cca4f351dcb310e0c8c0ec3132.
+2026-03-26 02:24:27,810 - 106579 - hummingbot.connector.client_order_tracker - INFO - Created LIMIT BUY order hbot-deltadefiBNTUM64ddd60ca3600182571cca4f351dcb310e0c8c0ec3132 for 2944.77 NIGHT-USDM at 0.04840.
+2026-03-26 02:24:27,822 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463067.0, "type": "OrderType.LIMIT", "trading_pair": "NIGHT-USDM", "amount": "2944.77", "price": "0.04840", "order_id": "hbot-deltadefiBNTUM64ddd60ca3600182571cca4f351dcb310e0c8c0ec3132", "creation_timestamp": 1774463067.0, "exchange_order_id": "8184ecda-ddaa-4066-bf91-5fb0e159e6d6", "leverage": 1, "position": "NIL", "event_name": "BuyOrderCreatedEvent", "event_source": "deltadefi"}
+2026-03-26 02:24:27,847 - 106579 - hummingbot.connector.client_order_tracker - INFO - Created LIMIT SELL order hbot-deltadefiSNTUM64ddd60ca35a3182571cca4f351dcb310e0c8c0ec3132 for 2918.37 NIGHT-USDM at 0.04884.
+2026-03-26 02:24:27,857 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463067.0, "type": "OrderType.LIMIT", "trading_pair": "NIGHT-USDM", "amount": "2918.37", "price": "0.04884", "order_id": "hbot-deltadefiSNTUM64ddd60ca35a3182571cca4f351dcb310e0c8c0ec3132", "creation_timestamp": 1774463067.0, "exchange_order_id": "b92d674c-724e-4eb1-b14c-8c36d082dcfb", "leverage": 1, "position": "NIL", "event_name": "SellOrderCreatedEvent", "event_source": "deltadefi"}
+2026-03-26 02:24:28,881 - 106579 - hummingbot.connector.client_order_tracker - INFO - The BUY order hbot-deltadefiBNTUM64ddd60ca3600182571cca4f351dcb310e0c8c0ec3132 amounting to 2944.77/2944.77 NIGHT has been filled at 0.04492 USDM.
+2026-03-26 02:24:28,899 - 106579 - hummingbot.strategy.strategy_v2_base - INFO - CL-AMM BUY 2944.7700 @ 0.044920 | P&L: -323.6334 | pool: 0.044639 | range: [0.042641, 0.047129] [clock=2026-03-25 18:24:28+00:00]
+2026-03-26 02:24:28,899 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463068.0, "order_id": "hbot-deltadefiBNTUM64ddd60ca3600182571cca4f351dcb310e0c8c0ec3132", "trading_pair": "NIGHT-USDM", "trade_type": "TradeType.BUY", "order_type": "OrderType.LIMIT", "price": "0.04492", "amount": "2944.77", "trade_fee": {"percent": "0", "percent_token": "NIGHT", "flat_fees": [{"token": "NIGHT", "amount": "2.94477"}]}, "exchange_trade_id": "30533133-d60a-4d5e-b030-7f9dc89f0dd3", "exchange_order_id": "8184ecda-ddaa-4066-bf91-5fb0e159e6d6", "leverage": 1, "position": "NIL", "event_name": "OrderFilledEvent", "event_source": "deltadefi"}
+2026-03-26 02:24:28,919 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463068.0, "order_id": "hbot-deltadefiBNTUM64ddd60ca3600182571cca4f351dcb310e0c8c0ec3132", "base_asset": "NIGHT", "quote_asset": "USDM", "base_asset_amount": "2944.77", "quote_asset_amount": "132.279068", "order_type": "OrderType.LIMIT", "exchange_order_id": "8184ecda-ddaa-4066-bf91-5fb0e159e6d6", "event_name": "BuyOrderCompletedEvent", "event_source": "deltadefi"}
+2026-03-26 02:24:28,919 - 106579 - hummingbot.connector.client_order_tracker - INFO - BUY order hbot-deltadefiBNTUM64ddd60ca3600182571cca4f351dcb310e0c8c0ec3132 completely filled.
+2026-03-26 02:24:28,998 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463068.0, "order_id": "hbot-deltadefiSNTUM64ddd60ca35a3182571cca4f351dcb310e0c8c0ec3132", "exchange_order_id": "b92d674c-724e-4eb1-b14c-8c36d082dcfb", "event_name": "OrderCancelledEvent", "event_source": "deltadefi"}
+2026-03-26 02:24:28,999 - 106579 - hummingbot.connector.client_order_tracker - INFO - Successfully canceled order hbot-deltadefiSNTUM64ddd60ca35a3182571cca4f351dcb310e0c8c0ec3132.
+2026-03-26 02:24:29,624 - 106579 - hummingbot.connector.client_order_tracker - INFO - Created LIMIT SELL order hbot-deltadefiSNTUM64ddd60e4d4b4182571cca4f351dcb310e0c8c0ec3132 for 3044.67 NIGHT-USDM at 0.04488.
+2026-03-26 02:24:29,639 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463069.0, "type": "OrderType.LIMIT", "trading_pair": "NIGHT-USDM", "amount": "3044.67", "price": "0.04488", "order_id": "hbot-deltadefiSNTUM64ddd60e4d4b4182571cca4f351dcb310e0c8c0ec3132", "creation_timestamp": 1774463068.0, "exchange_order_id": "d83b0473-91ff-492c-bddf-55a26b69b36e", "leverage": 1, "position": "NIL", "event_name": "SellOrderCreatedEvent", "event_source": "deltadefi"}
+2026-03-26 02:24:29,663 - 106579 - hummingbot.connector.client_order_tracker - INFO - Created LIMIT BUY order hbot-deltadefiBNTUM64ddd60e4d511182571cca4f351dcb310e0c8c0ec3132 for 3075.30 NIGHT-USDM at 0.04443.
+2026-03-26 02:24:29,679 - 106579 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463069.0, "type": "OrderType.LIMIT", "trading_pair": "NIGHT-USDM", "amount": "3075.30", "price": "0.04443", "order_id": "hbot-deltadefiBNTUM64ddd60e4d511182571cca4f351dcb310e0c8c0ec3132", "creation_timestamp": 1774463068.0, "exchange_order_id": "32539b69-2fdc-4930-9440-f9ba24cbec5a", "leverage": 1, "position": "NIL", "event_name": "BuyOrderCreatedEvent", "event_source": "deltadefi"}
+2026-03-26 02:28:47,759 - 803759 - hummingbot.core.trading_core - INFO - Markets recorder initialized with database: conf_deltadefi_cl_amm_mm_2
+2026-03-26 02:28:47,791 - 803759 - hummingbot.core.trading_core - INFO - Creating the clock with tick size: 1.0
+2026-03-26 02:28:47,791 - 803759 - hummingbot.core.trading_core - INFO - Clock started successfully
+2026-03-26 02:28:47,795 - 803759 - hummingbot.core.trading_core - INFO - 'deltadefi_cl_amm_mm' strategy execution started.
+2026-03-26 02:28:47,796 - 803759 - hummingbot.core.trading_core - INFO - Strategy deltadefi_cl_amm_mm started successfully
+2026-03-26 02:28:47,873 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - INFO - Network status has changed to NetworkStatus.CONNECTED. Starting networking...
+2026-03-26 02:28:47,874 - 803759 - hummingbot.core.data_type.order_book_tracker - INFO - Initialized order book for NIGHT-USDM. 1/1 completed.
+2026-03-26 02:28:47,993 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - INFO - Operation wallet initialized successfully for transaction signing
+2026-03-26 02:28:48,473 - 803759 - hummingbot.strategy.strategy_v2_base - WARNING - deltadefi is not ready. Please wait...
+2026-03-26 02:28:48,497 - 803759 - hummingbot.core.rate_oracle.rate_oracle - INFO - Network status has changed to NetworkStatus.CONNECTED. Starting networking...
+2026-03-26 02:28:48,527 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - INFO - Startup cancel-all sent for NIGHT-USDM
+2026-03-26 02:28:48,545 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-03-26 02:28:48,546 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-26 02:28:48,560 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-03-26 02:28:48,561 - 803759 - hummingbot.connector.client_order_tracker - INFO - The SELL order hbot-deltadefiSNTUM64ddd60e4d4b4182571cca4f351dcb310e0c8c0ec3132 amounting to 3044.67/3044.67 NIGHT has been filled at 0.04488 USDM.
+2026-03-26 02:28:48,562 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Ask orderbook for NIGHT-USDM is empty.
+2026-03-26 02:28:48,562 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Bid orderbook for NIGHT-USDM is empty.
+2026-03-26 02:28:48,562 - 803759 - hummingbot.strategy.strategy_v2_base - INFO - CL-AMM SELL 3044.6700 @ 0.044880 | P&L: n/a | pool: 0.045100 | range: [0.042409, 0.047352] [clock=2026-03-25 18:28:48+00:00]
+2026-03-26 02:28:48,575 - 803759 - hummingbot.core.data_type.in_flight_order - ERROR - Error calculating fee paid in NIGHT: Could not find the exchange rate for USDM-NIGHT using the rate source binance rate oracle (please verify it has been correctly configured)
+2026-03-26 02:28:48,587 - 803759 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463328.0, "order_id": "hbot-deltadefiSNTUM64ddd60e4d4b4182571cca4f351dcb310e0c8c0ec3132", "trading_pair": "NIGHT-USDM", "trade_type": "TradeType.SELL", "order_type": "OrderType.LIMIT", "price": "0.04488", "amount": "3044.67", "trade_fee": {"percent": "0", "percent_token": "USDM", "flat_fees": [{"token": "USDM", "amount": "0.136644"}]}, "exchange_trade_id": "b1dc9635-b4c8-4cac-8a88-6d19d3e3fa22", "exchange_order_id": "d83b0473-91ff-492c-bddf-55a26b69b36e", "leverage": 1, "position": "NIL", "event_name": "OrderFilledEvent", "event_source": "deltadefi"}
+2026-03-26 02:28:48,605 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Ask orderbook for NIGHT-USDM is empty.
+2026-03-26 02:28:48,605 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Bid orderbook for NIGHT-USDM is empty.
+2026-03-26 02:28:48,669 - 803759 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463328.0, "order_id": "hbot-deltadefiBNTUM64ddd60e4d511182571cca4f351dcb310e0c8c0ec3132", "exchange_order_id": "32539b69-2fdc-4930-9440-f9ba24cbec5a", "event_name": "OrderCancelledEvent", "event_source": "deltadefi"}
+2026-03-26 02:28:48,669 - 803759 - hummingbot.connector.client_order_tracker - INFO - Successfully canceled order hbot-deltadefiBNTUM64ddd60e4d511182571cca4f351dcb310e0c8c0ec3132.
+2026-03-26 02:28:48,705 - 803759 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463328.0, "order_id": "hbot-deltadefiSNTUM64ddd60e4d4b4182571cca4f351dcb310e0c8c0ec3132", "base_asset": "NIGHT", "quote_asset": "USDM", "base_asset_amount": "3044.67", "quote_asset_amount": "136.644789", "order_type": "OrderType.LIMIT", "exchange_order_id": "d83b0473-91ff-492c-bddf-55a26b69b36e", "event_name": "SellOrderCompletedEvent", "event_source": "deltadefi"}
+2026-03-26 02:28:48,705 - 803759 - hummingbot.connector.client_order_tracker - INFO - SELL order hbot-deltadefiSNTUM64ddd60e4d4b4182571cca4f351dcb310e0c8c0ec3132 completely filled.
+2026-03-26 02:28:49,091 - 803759 - hummingbot.connector.client_order_tracker - INFO - Created LIMIT BUY order hbot-deltadefiBNTUM64ddd705f1d41be54acce6f1c2038587b1cbef4fe537e for 3068.03 NIGHT-USDM at 0.04486.
+2026-03-26 02:28:49,110 - 803759 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463329.0, "type": "OrderType.LIMIT", "trading_pair": "NIGHT-USDM", "amount": "3068.03", "price": "0.04486", "order_id": "hbot-deltadefiBNTUM64ddd705f1d41be54acce6f1c2038587b1cbef4fe537e", "creation_timestamp": 1774463328.0, "exchange_order_id": "97026f43-63c8-4277-b1df-e23f9a48eef0", "leverage": 1, "position": "NIL", "event_name": "BuyOrderCreatedEvent", "event_source": "deltadefi"}
+2026-03-26 02:28:49,194 - 803759 - hummingbot.connector.client_order_tracker - INFO - Created LIMIT SELL order hbot-deltadefiSNTUM64ddd705f1cccbe54acce6f1c2038587b1cbef4fe537e for 3040.56 NIGHT-USDM at 0.04526.
+2026-03-26 02:28:49,208 - 803759 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463329.0, "type": "OrderType.LIMIT", "trading_pair": "NIGHT-USDM", "amount": "3040.56", "price": "0.04526", "order_id": "hbot-deltadefiSNTUM64ddd705f1cccbe54acce6f1c2038587b1cbef4fe537e", "creation_timestamp": 1774463328.0, "exchange_order_id": "bf5a4013-21b5-4640-8ea5-a4f568554418", "leverage": 1, "position": "NIL", "event_name": "SellOrderCreatedEvent", "event_source": "deltadefi"}
+2026-03-26 02:28:50,068 - 803759 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463330.0, "order_id": "hbot-deltadefiSNTUM64ddd705f1cccbe54acce6f1c2038587b1cbef4fe537e", "exchange_order_id": "bf5a4013-21b5-4640-8ea5-a4f568554418", "event_name": "OrderCancelledEvent", "event_source": "deltadefi"}
+2026-03-26 02:28:50,068 - 803759 - hummingbot.connector.client_order_tracker - INFO - Successfully canceled order hbot-deltadefiSNTUM64ddd705f1cccbe54acce6f1c2038587b1cbef4fe537e.
+2026-03-26 02:28:50,082 - 803759 - hummingbot.core.event.event_reporter - EVENT_LOG - {"timestamp": 1774463330.0, "order_id": "hbot-deltadefiBNTUM64ddd705f1d41be54acce6f1c2038587b1cbef4fe537e", "exchange_order_id": "97026f43-63c8-4277-b1df-e23f9a48eef0", "event_name": "OrderCancelledEvent", "event_source": "deltadefi"}
+2026-03-26 02:28:50,082 - 803759 - hummingbot.connector.client_order_tracker - INFO - Successfully canceled order hbot-deltadefiBNTUM64ddd705f1d41be54acce6f1c2038587b1cbef4fe537e.
+2026-03-26 02:44:58,012 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-03-26 02:45:03,074 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-26 16:31:52,716 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-03-26 16:31:57,801 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-26 17:02:11,057 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-26 17:02:11,143 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-03-26 21:24:17,066 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/night-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-03-26 21:24:22,148 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-26 22:04:42,392 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-26 22:04:42,459 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-03-26 22:05:49,608 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-26 22:05:49,685 - 803759 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)

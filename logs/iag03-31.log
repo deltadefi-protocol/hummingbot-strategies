@@ -1,0 +1,716 @@
+2026-03-31 15:29:24,360 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-31 15:29:24,367 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-31 15:29:24,444 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-03-31 15:29:24,492 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-03-31 15:30:20,481 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-03-31 15:30:25,543 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-31 15:31:41,773 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - ERROR - Error during balance reconciliation.
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 842, in _reconcile_balances
+    await self._update_balances()
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 228, in _update_balances
+    msg = await self._api_request(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+        path_url=CONSTANTS.BALANCE_PATH,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        is_auth_required=True)
+        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 630, in _api_request
+    return await super()._api_request(path_url=path_url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 937, in _api_request
+    request_result = await rest_assistant.execute_request(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 48, in execute_request
+    response = await self.execute_request_and_get_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 101, in execute_request_and_get_response
+    raise IOError(f"Error executing request {method.name} {url}. HTTP status is {response.status}. "
+                  f"Error: {error_text}")
+OSError: Error executing request GET https://api-staging.deltadefi.io/accounts/balance. HTTP status is 403. Error: 
+2026-03-31 15:32:08,338 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-03-31 15:32:13,386 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-31 15:34:29,690 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-03-31 15:34:29,695 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-31 15:34:29,698 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-31 15:34:29,768 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-03-31 15:34:39,766 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - ERROR - Unexpected error while listening to user stream. Retrying after 5 seconds...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/data_type/user_stream_tracker_data_source.py", line 45, in listen_for_user_stream
+    self._ws_assistant = await self._connected_websocket_assistant()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_user_stream_data_source.py", line 37, in _connected_websocket_assistant
+    await ws.connect(
+        ws_url=ws_url,
+        message_timeout=CONSTANTS.SECONDS_TO_WAIT_TO_RECEIVE_MESSAGE)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 45, in connect
+    await self._connection.connect(
+    ...<4 lines>...
+        max_msg_size=max_msg_size)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 39, in connect
+    self._connection = await self._client_session.ws_connect(
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/client.py", line 1093, in _ws_connect
+    raise WSServerHandshakeError(
+    ...<5 lines>...
+    )
+aiohttp.client_exceptions.WSServerHandshakeError: 403, message='Invalid response status', url='wss://stream-staging.deltadefi.io/accounts/stream?api_key=f312a6ac4809472697d8efe9f0fabc81'
+2026-03-31 15:34:40,012 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Failed to update balances. Error: Error executing request GET https://api-staging.deltadefi.io/accounts/balance. HTTP status is 403. Error: 
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 970, in _update_all_balances
+    await self._update_balances()
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 228, in _update_balances
+    msg = await self._api_request(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+        path_url=CONSTANTS.BALANCE_PATH,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        is_auth_required=True)
+        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 630, in _api_request
+    return await super()._api_request(path_url=path_url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 937, in _api_request
+    request_result = await rest_assistant.execute_request(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 48, in execute_request
+    response = await self.execute_request_and_get_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 101, in execute_request_and_get_response
+    raise IOError(f"Error executing request {method.name} {url}. HTTP status is {response.status}. "
+                  f"Error: {error_text}")
+OSError: Error executing request GET https://api-staging.deltadefi.io/accounts/balance. HTTP status is 403. Error: 
+2026-03-31 15:34:41,181 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - ERROR - Unexpected error while listening to user stream. Retrying after 5 seconds...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/data_type/user_stream_tracker_data_source.py", line 45, in listen_for_user_stream
+    self._ws_assistant = await self._connected_websocket_assistant()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_user_stream_data_source.py", line 37, in _connected_websocket_assistant
+    await ws.connect(
+        ws_url=ws_url,
+        message_timeout=CONSTANTS.SECONDS_TO_WAIT_TO_RECEIVE_MESSAGE)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 45, in connect
+    await self._connection.connect(
+    ...<4 lines>...
+        max_msg_size=max_msg_size)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 39, in connect
+    self._connection = await self._client_session.ws_connect(
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/client.py", line 1093, in _ws_connect
+    raise WSServerHandshakeError(
+    ...<5 lines>...
+    )
+aiohttp.client_exceptions.WSServerHandshakeError: 503, message='Invalid response status', url='wss://stream-staging.deltadefi.io/accounts/stream?api_key=f312a6ac4809472697d8efe9f0fabc81'
+2026-03-31 15:34:44,733 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 202, in listen_for_trades
+    await trades_ws.connect(
+        ws_url=ws_url,
+        message_timeout=CONSTANTS.SECONDS_TO_WAIT_TO_RECEIVE_MESSAGE)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 45, in connect
+    await self._connection.connect(
+    ...<4 lines>...
+        max_msg_size=max_msg_size)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 39, in connect
+    self._connection = await self._client_session.ws_connect(
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/client.py", line 1093, in _ws_connect
+    raise WSServerHandshakeError(
+    ...<5 lines>...
+    )
+aiohttp.client_exceptions.WSServerHandshakeError: 503, message='Invalid response status', url='wss://stream-staging.deltadefi.io/market/recent-trades/IAGUSDM?api_key=f312a6ac4809472697d8efe9f0fabc81'
+2026-03-31 15:34:49,781 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-31 15:34:49,815 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - NETWORK - Unexpected error while fetching trading rules.
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 763, in _trading_rules_polling_loop
+    await safe_gather(self._update_trading_rules())
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/utils/async_utils.py", line 22, in safe_gather
+    return await asyncio.gather(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 885, in _update_trading_rules
+    exchange_info = await self._make_trading_rules_request()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 1113, in _make_trading_rules_request
+    exchange_info = await self._api_get(path_url=self.trading_rules_request_path)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 894, in _api_get
+    return await self._api_request(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 630, in _api_request
+    return await super()._api_request(path_url=path_url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 937, in _api_request
+    request_result = await rest_assistant.execute_request(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 48, in execute_request
+    response = await self.execute_request_and_get_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 101, in execute_request_and_get_response
+    raise IOError(f"Error executing request {method.name} {url}. HTTP status is {response.status}. "
+                  f"Error: {error_text}")
+OSError: Error executing request GET https://api-staging.deltadefi.io/app/market-config. HTTP status is 503. Error: upstream connect error or disconnect/reset before headers. reset reason: connection timeout
+2026-03-31 15:34:49,820 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Could not fetch new trading rules from Deltadefi Check network connection.
+2026-03-31 15:34:52,204 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - ERROR - Unexpected error while listening to user stream. Retrying after 5 seconds...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/data_type/user_stream_tracker_data_source.py", line 45, in listen_for_user_stream
+    self._ws_assistant = await self._connected_websocket_assistant()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_user_stream_data_source.py", line 37, in _connected_websocket_assistant
+    await ws.connect(
+        ws_url=ws_url,
+        message_timeout=CONSTANTS.SECONDS_TO_WAIT_TO_RECEIVE_MESSAGE)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 45, in connect
+    await self._connection.connect(
+    ...<4 lines>...
+        max_msg_size=max_msg_size)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 39, in connect
+    self._connection = await self._client_session.ws_connect(
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/client.py", line 1093, in _ws_connect
+    raise WSServerHandshakeError(
+    ...<5 lines>...
+    )
+aiohttp.client_exceptions.WSServerHandshakeError: 403, message='Invalid response status', url='wss://stream-staging.deltadefi.io/accounts/stream?api_key=f312a6ac4809472697d8efe9f0fabc81'
+2026-03-31 15:34:53,861 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Failed to update balances. Error: Error executing request GET https://api-staging.deltadefi.io/accounts/balance. HTTP status is 403. Error: 
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 970, in _update_all_balances
+    await self._update_balances()
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 228, in _update_balances
+    msg = await self._api_request(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+        path_url=CONSTANTS.BALANCE_PATH,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        is_auth_required=True)
+        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 630, in _api_request
+    return await super()._api_request(path_url=path_url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 937, in _api_request
+    request_result = await rest_assistant.execute_request(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 48, in execute_request
+    response = await self.execute_request_and_get_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 101, in execute_request_and_get_response
+    raise IOError(f"Error executing request {method.name} {url}. HTTP status is {response.status}. "
+                  f"Error: {error_text}")
+OSError: Error executing request GET https://api-staging.deltadefi.io/accounts/balance. HTTP status is 403. Error: 
+2026-03-31 15:35:03,231 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - ERROR - Unexpected error while listening to user stream. Retrying after 5 seconds...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/data_type/user_stream_tracker_data_source.py", line 45, in listen_for_user_stream
+    self._ws_assistant = await self._connected_websocket_assistant()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_user_stream_data_source.py", line 37, in _connected_websocket_assistant
+    await ws.connect(
+        ws_url=ws_url,
+        message_timeout=CONSTANTS.SECONDS_TO_WAIT_TO_RECEIVE_MESSAGE)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 45, in connect
+    await self._connection.connect(
+    ...<4 lines>...
+        max_msg_size=max_msg_size)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 39, in connect
+    self._connection = await self._client_session.ws_connect(
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/client.py", line 1093, in _ws_connect
+    raise WSServerHandshakeError(
+    ...<5 lines>...
+    )
+aiohttp.client_exceptions.WSServerHandshakeError: 503, message='Invalid response status', url='wss://stream-staging.deltadefi.io/accounts/stream?api_key=f312a6ac4809472697d8efe9f0fabc81'
+2026-03-31 15:35:05,534 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - INFO - Network status has changed to NetworkStatus.CONNECTED. Starting networking...
+2026-03-31 15:35:13,937 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - WARNING - Failed to update balances. Error: Error executing request GET https://api-staging.deltadefi.io/accounts/balance. HTTP status is 503. Error: upstream connect error or disconnect/reset before headers. reset reason: connection timeout
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 970, in _update_all_balances
+    await self._update_balances()
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 228, in _update_balances
+    msg = await self._api_request(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+        path_url=CONSTANTS.BALANCE_PATH,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        is_auth_required=True)
+        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 630, in _api_request
+    return await super()._api_request(path_url=path_url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 937, in _api_request
+    request_result = await rest_assistant.execute_request(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 48, in execute_request
+    response = await self.execute_request_and_get_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 101, in execute_request_and_get_response
+    raise IOError(f"Error executing request {method.name} {url}. HTTP status is {response.status}. "
+                  f"Error: {error_text}")
+OSError: Error executing request GET https://api-staging.deltadefi.io/accounts/balance. HTTP status is 503. Error: upstream connect error or disconnect/reset before headers. reset reason: connection timeout
+2026-03-31 15:35:15,548 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - ERROR - Error fetching operation key. Transaction signing may not work.
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 662, in _initialize_operation_wallet
+    response = await self._api_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 630, in _api_request
+    return await super()._api_request(path_url=path_url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 937, in _api_request
+    request_result = await rest_assistant.execute_request(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 48, in execute_request
+    response = await self.execute_request_and_get_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 101, in execute_request_and_get_response
+    raise IOError(f"Error executing request {method.name} {url}. HTTP status is {response.status}. "
+                  f"Error: {error_text}")
+OSError: Error executing request GET https://api-staging.deltadefi.io/accounts/operation-key. HTTP status is 403. Error: 
+2026-03-31 15:35:15,602 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - ERROR - Unexpected error while listening to user stream. Retrying after 5 seconds...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/data_type/user_stream_tracker_data_source.py", line 45, in listen_for_user_stream
+    self._ws_assistant = await self._connected_websocket_assistant()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_user_stream_data_source.py", line 37, in _connected_websocket_assistant
+    await ws.connect(
+        ws_url=ws_url,
+        message_timeout=CONSTANTS.SECONDS_TO_WAIT_TO_RECEIVE_MESSAGE)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 45, in connect
+    await self._connection.connect(
+    ...<4 lines>...
+        max_msg_size=max_msg_size)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 39, in connect
+    self._connection = await self._client_session.ws_connect(
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/client.py", line 1093, in _ws_connect
+    raise WSServerHandshakeError(
+    ...<5 lines>...
+    )
+aiohttp.client_exceptions.WSServerHandshakeError: 403, message='Invalid response status', url='wss://stream-staging.deltadefi.io/accounts/stream?api_key=f312a6ac4809472697d8efe9f0fabc81'
+2026-03-31 15:35:15,628 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 202, in listen_for_trades
+    await trades_ws.connect(
+        ws_url=ws_url,
+        message_timeout=CONSTANTS.SECONDS_TO_WAIT_TO_RECEIVE_MESSAGE)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 45, in connect
+    await self._connection.connect(
+    ...<4 lines>...
+        max_msg_size=max_msg_size)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 39, in connect
+    self._connection = await self._client_session.ws_connect(
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/client.py", line 1093, in _ws_connect
+    raise WSServerHandshakeError(
+    ...<5 lines>...
+    )
+aiohttp.client_exceptions.WSServerHandshakeError: 503, message='Invalid response status', url='wss://stream-staging.deltadefi.io/market/recent-trades/IAGUSDM?api_key=f312a6ac4809472697d8efe9f0fabc81'
+2026-03-31 15:35:15,641 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error occurred when listening to order book streams. Retrying in 5 seconds...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/data_type/order_book_tracker_data_source.py", line 79, in listen_for_subscriptions
+    ws: WSAssistant = await self._connected_websocket_assistant()
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 181, in _connected_websocket_assistant
+    await ws.connect(
+        ws_url=ws_url,
+        message_timeout=CONSTANTS.SECONDS_TO_WAIT_TO_RECEIVE_MESSAGE)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 45, in connect
+    await self._connection.connect(
+    ...<4 lines>...
+        max_msg_size=max_msg_size)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 39, in connect
+    self._connection = await self._client_session.ws_connect(
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/miniforge3/envs/hummingbot/lib/python3.13/site-packages/aiohttp/client.py", line 1093, in _ws_connect
+    raise WSServerHandshakeError(
+    ...<5 lines>...
+    )
+aiohttp.client_exceptions.WSServerHandshakeError: 503, message='Invalid response status', url='wss://stream-staging.deltadefi.io/market/depth/IAGUSDM?api_key=f312a6ac4809472697d8efe9f0fabc81'
+2026-03-31 15:35:16,638 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-03-31 15:35:16,679 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-03-31 15:35:20,655 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-31 15:52:50,727 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-31 15:52:50,728 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-03-31 15:52:50,732 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-03-31 15:52:50,798 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-03-31 15:52:50,822 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-03-31 15:52:55,775 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-03-31 15:53:21,099 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - ERROR - Error during balance reconciliation.
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 842, in _reconcile_balances
+    await self._update_balances()
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 228, in _update_balances
+    msg = await self._api_request(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+        path_url=CONSTANTS.BALANCE_PATH,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        is_auth_required=True)
+        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 630, in _api_request
+    return await super()._api_request(path_url=path_url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 937, in _api_request
+    request_result = await rest_assistant.execute_request(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 48, in execute_request
+    response = await self.execute_request_and_get_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 101, in execute_request_and_get_response
+    raise IOError(f"Error executing request {method.name} {url}. HTTP status is {response.status}. "
+                  f"Error: {error_text}")
+OSError: Error executing request GET https://api-staging.deltadefi.io/accounts/balance. HTTP status is 403. Error: 
+2026-03-31 15:53:31,169 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - ERROR - Error during balance reconciliation.
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 842, in _reconcile_balances
+    await self._update_balances()
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 228, in _update_balances
+    msg = await self._api_request(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+        path_url=CONSTANTS.BALANCE_PATH,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        is_auth_required=True)
+        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 630, in _api_request
+    return await super()._api_request(path_url=path_url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 937, in _api_request
+    request_result = await rest_assistant.execute_request(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 48, in execute_request
+    response = await self.execute_request_and_get_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 101, in execute_request_and_get_response
+    raise IOError(f"Error executing request {method.name} {url}. HTTP status is {response.status}. "
+                  f"Error: {error_text}")
+OSError: Error executing request GET https://api-staging.deltadefi.io/accounts/balance. HTTP status is 403. Error: 
+2026-04-01 00:52:24,288 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-04-01 00:52:24,363 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-04-01 02:07:51,636 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-04-01 02:07:56,764 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-04-01 09:15:42,157 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-04-01 09:15:42,243 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-04-01 09:38:13,189 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-04-01 09:38:13,247 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-04-01 10:08:28,836 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1001 msg data: 1001)
+2026-04-01 10:08:28,904 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-04-01 10:17:26,721 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1001 msg data: 1001
+2026-04-01 10:17:31,781 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-04-01 10:24:37,719 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1001 msg data: 1001)
+2026-04-01 10:24:37,792 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-04-01 13:09:29,695 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-04-01 13:09:29,732 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-04-01 13:09:29,810 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-04-01 13:09:29,835 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-04-01 13:10:35,846 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-04-01 13:10:35,857 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-04-01 13:10:35,955 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-04-01 13:10:40,916 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-04-01 13:21:22,990 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-04-01 13:21:22,991 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - WARNING - The websocket connection was closed (The WS connection was closed unexpectedly. Close code = 1006 msg data: None)
+2026-04-01 13:21:23,003 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - ERROR - Unexpected error in trades listener. Reconnecting...
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_api_order_book_data_source.py", line 210, in listen_for_trades
+    async for ws_response in trades_ws.iter_messages():
+    ...<2 lines>...
+            await self._parse_trade_message(msg, output)
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/ws_assistant.py", line 71, in iter_messages
+    response = await self._connection.receive()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 67, in receive
+    msg = await self._process_message(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 89, in _process_message
+    msg = await self._check_msg_types(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 95, in _check_msg_types
+    msg = await self._check_msg_closed_type(msg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/connections/ws_connection.py", line 115, in _check_msg_closed_type
+    raise ConnectionError(
+        f"The WS connection was closed unexpectedly. Close code = {close_code} msg data: {msg.data}"
+    )
+ConnectionError: The WS connection was closed unexpectedly. Close code = 1006 msg data: None
+2026-04-01 13:21:23,083 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market depth stream (auto-subscribed)
+2026-04-01 13:21:23,100 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_user_stream_data_source.DeltaDefiAPIUserStreamDataSource - INFO - Connected to private account stream (auto-subscribed)
+2026-04-01 13:21:28,057 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_api_order_book_data_source.DeltaDefiAPIOrderBookDataSource - INFO - Connected to market trades stream
+2026-04-01 13:55:00,159 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - ERROR - Error during balance reconciliation.
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 842, in _reconcile_balances
+    await self._update_balances()
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 228, in _update_balances
+    msg = await self._api_request(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+        path_url=CONSTANTS.BALANCE_PATH,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        is_auth_required=True)
+        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 630, in _api_request
+    return await super()._api_request(path_url=path_url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 937, in _api_request
+    request_result = await rest_assistant.execute_request(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 48, in execute_request
+    response = await self.execute_request_and_get_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 101, in execute_request_and_get_response
+    raise IOError(f"Error executing request {method.name} {url}. HTTP status is {response.status}. "
+                  f"Error: {error_text}")
+OSError: Error executing request GET https://api-staging.deltadefi.io/accounts/balance. HTTP status is 503. Error: upstream connect error or disconnect/reset before headers. reset reason: remote connection failure, transport failure reason: delayed connect error: Connection refused
+2026-04-01 15:24:16,485 - 804034 - hummingbot.connector.exchange.deltadefi.deltadefi_exchange.DeltadefiExchange - ERROR - Error during balance reconciliation.
+Traceback (most recent call last):
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 842, in _reconcile_balances
+    await self._update_balances()
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 228, in _update_balances
+    msg = await self._api_request(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+        path_url=CONSTANTS.BALANCE_PATH,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        is_auth_required=True)
+        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange/deltadefi/deltadefi_exchange.py", line 630, in _api_request
+    return await super()._api_request(path_url=path_url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/connector/exchange_py_base.py", line 937, in _api_request
+    request_result = await rest_assistant.execute_request(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 48, in execute_request
+    response = await self.execute_request_and_get_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "/home/yanyuk_tom/iag-staging-hummingbot/hummingbot/core/web_assistant/rest_assistant.py", line 101, in execute_request_and_get_response
+    raise IOError(f"Error executing request {method.name} {url}. HTTP status is {response.status}. "
+                  f"Error: {error_text}")
+OSError: Error executing request GET https://api-staging.deltadefi.io/accounts/balance. HTTP status is 503. Error: upstream connect error or disconnect/reset before headers. reset reason: remote connection failure, transport failure reason: delayed connect error: Connection refused
