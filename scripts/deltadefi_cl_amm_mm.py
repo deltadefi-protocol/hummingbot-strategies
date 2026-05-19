@@ -329,6 +329,16 @@ class DeltaDefiCLAMMConfig(StrategyV2ConfigBase):
             raise ValueError("base_concentration_pct must be > 0")
         if self.min_concentration_pct >= self.max_concentration_pct:
             raise ValueError("min_concentration_pct must be < max_concentration_pct")
+        # Without this check, raw_pct is silently clamped to [min, max] in
+        # DynamicRangeController.compute_concentration_pct, so a base outside
+        # the corridor secretly runs at the corridor boundary — past sweeps
+        # over concentration=3 with min=5 actually tested concentration=5.
+        if not (self.min_concentration_pct <= self.base_concentration_pct
+                <= self.max_concentration_pct):
+            raise ValueError(
+                f"base_concentration_pct ({self.base_concentration_pct}) "
+                f"must be in [min_concentration_pct={self.min_concentration_pct},"
+                f" max_concentration_pct={self.max_concentration_pct}]")
         if self.toxicity_window_sec <= 0:
             raise ValueError("toxicity_window_sec must be > 0")
         if self.toxicity_window_fills < 5:

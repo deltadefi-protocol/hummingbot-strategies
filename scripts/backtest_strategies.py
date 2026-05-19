@@ -202,6 +202,8 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         # Outer range architecture
         self.outer_capital_fraction = D(str(config.get("outer_capital_fraction", "0.30")))
         self.outer_spread_mult = D(str(config.get("outer_spread_mult", "2.5")))
+        self.outer_spread_pct_of_range = D(str(
+            config.get("outer_spread_pct_of_range", "0.60")))
         self.outer_range_mult = D(str(config.get("outer_range_mult", "2.5")))
         self.outer_recenter_trigger_pct = D(str(config.get("outer_recenter_trigger_pct", "0.50")))
         # Mock hedge (futures overlay)
@@ -243,6 +245,20 @@ class CLAMMBacktestStrategy(BacktestStrategy):
             config.get("min_concentration", "5")))
         self.max_concentration_pct = D(str(
             config.get("max_concentration", "20")))
+        if self.min_concentration_pct >= self.max_concentration_pct:
+            raise ValueError(
+                f"min_concentration ({self.min_concentration_pct}) must be "
+                f"< max_concentration ({self.max_concentration_pct})")
+        # See deltadefi_cl_amm_mm.py — raw_pct is silently clamped to
+        # [min, max] inside DynamicRangeController, so a base outside the
+        # corridor secretly runs at the corridor boundary.
+        if not (self.min_concentration_pct <= self.base_concentration_pct
+                <= self.max_concentration_pct):
+            raise ValueError(
+                f"concentration ({self.base_concentration_pct}) must be in "
+                f"[min_concentration={self.min_concentration_pct}, "
+                f"max_concentration={self.max_concentration_pct}]. "
+                f"Past sweeps silently clamped values outside this range.")
 
         # Indicator params
         self.natr_period = int(config.get("natr_period", 14))
@@ -545,9 +561,18 @@ class CLAMMBacktestStrategy(BacktestStrategy):
         orders += self._make_order_pair(mid_price, inner_spread, inner_value,
                                         toxicity, inventory, outer_zone=False)
 
-        # Outer zone: outer_capital_fraction of order value, wider spread
+        # Outer zone: outer_capital_fraction of order value, wider spread.
+        # Mirror live strategy (deltadefi_cl_amm_mm.py:1437) — outer sits at the
+        # MAX of two anchors so the wing always lives in the outer portion of
+        # the range, not bunched against the inner band. With concentration=15
+        # and base_spread=50bps, outer_from_range=9% dominates outer_from_mult=
+        # 1.25% by ~60×, so a backtest using only the mult anchor places outer
+        # orders nearly on top of inner orders.
         outer_value = order_value * self.outer_capital_fraction
-        outer_spread = inner_spread * self.outer_spread_mult
+        outer_from_mult = inner_spread * self.outer_spread_mult
+        outer_from_range = (self.pool.concentration_pct / D("100")
+                            * self.outer_spread_pct_of_range)
+        outer_spread = max(outer_from_mult, outer_from_range)
         orders += self._make_order_pair(mid_price, outer_spread, outer_value,
                                         toxicity, inventory, outer_zone=True)
         return orders

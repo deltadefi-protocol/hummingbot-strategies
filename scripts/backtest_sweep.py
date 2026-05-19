@@ -115,8 +115,17 @@ def _run_single(task: Tuple[int, str, dict, Decimal, Decimal]) -> dict:
 
 
 def _parse_value(v: str):
-    """Auto-detect int / Decimal / str."""
+    """Auto-detect bool / int / Decimal / str.
+
+    Booleans must come BEFORE the int/Decimal branches because the string
+    "False" is truthy in Python — without explicit handling a sweep like
+    `enable_asymmetric_spread=True,False` silently runs both as True.
+    """
     v = v.strip()
+    if v in ("True", "true"):
+        return True
+    if v in ("False", "false"):
+        return False
     try:
         return int(v)
     except ValueError:
@@ -305,9 +314,9 @@ DEFAULT_CL_AMM_CONFIG = {
     "enable_asymmetric_spread": True,
     "skew_sensitivity": D("0.5"),
     "min_spread_bps": D("20"),
-    "concentration": D("5"),
-    "min_concentration": D("5"),
-    "max_concentration": D("20"),
+    "concentration": D("10"),
+    "min_concentration": D("3"),
+    "max_concentration": D("40"),
     "natr_period": 14,
     "natr_baseline": D("0.005"),
     "natr_range_scale": D("1.0"),
